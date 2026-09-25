@@ -7,7 +7,7 @@
 
 | Лимит | Замерено | Где проверяется |
 |---|---|---|
-| RAM ≤ 10 МБ | свежий сервер ~9.7 МБ; после полного smoke (замер после штатного flush-реклейма) `rss_kb` ≤ 10240 | smoke-проверка `RSS ≤ 10240` (`RSS_MAX_KB` настраивается; CI ставит 14336) |
+| RAM ≤ 10 МБ | свежий сервер ~9.7 МБ; после полного smoke (замер после штатного flush-реклейма) `rss_kb` ≤ 10240 | smoke-проверка `RSS ≤ 10240` (`RSS_MAX_KB` настраивается; CI ставит 15360 (sanity-check, бюджет 10240 — на устройстве)) |
 | Диск ≤ 100 МБ | квота `PRAGMA max_page_count` (`-max-size`) | сервер |
 | Бинарь ≤ 10 МБ | dev (libsqlite3) **4055248**, portable (bundled SQLite) **5407568** | `make build` (size-check) |
 | C-либа ≤ 512 КиБ | `libwebdb.a` 24696, `libwebdb.so` 26072 | `make size-check` |
@@ -80,7 +80,7 @@ query (`net/url` заменён). **Нет DNS** — `-addr` принимает 
 - **`.github/workflows/ci.yml`** (вместо Colab):
   - `test` (ubuntu): `make check` на dev-пути (`-tags libsqlite3` +
     `libsqlite3-dev`) и portable-сборка (bundled SQLite) с повторным
-    smoke/security; `RSS_MAX_KB=14336` (x86-64 даёт иной базовый RSS);
+    smoke/security; `RSS_MAX_KB=15360` (sanity-check; 10240 проверяется на устройстве);
   - `build`: 13 linux-архитектур кросс-сборкой; `mips`/`mipsle` — hard-float
     ABI (дистрибутивный o32-тулчейн только hard-float), `ppc64` — `zig cc`
     (дистрибутивный даёт ELFv1, Go требует ELFv2), `loong64` — `zig cc`

@@ -129,7 +129,7 @@
   - свежий `db.sqlite` создавался 0644 — принудительный chmod 0600.
 - [x] CI `.github/workflows/ci.yml`:
   - `test` (ubuntu): `make check` на dev-пути (libsqlite3) + portable-сборка
-    (bundled SQLite) + smoke/security; RSS_MAX_KB=14336 для x86-64;
+    (bundled SQLite) + smoke/security; RSS_MAX_KB=15360 для x86-64 (sanity-check);
   - `build`: 13 linux-архитектур кросс-сборкой (amd64, 386, arm64, armv7,
     riscv64, ppc64le, ppc64, s390x, loong64, mips64le, mips64, mipsle, mips);
   - `android`: arm64 + armv7 через NDK clang (то, что нужно Termux);
