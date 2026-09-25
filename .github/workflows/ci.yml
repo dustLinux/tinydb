@@ -60,10 +60,12 @@ jobs:
           - {artifact: webdb-linux-armv7,   goarch: arm,     goarm: '7', cc: arm-linux-gnueabihf-gcc, apt: gcc-arm-linux-gnueabihf}
           - {artifact: webdb-linux-riscv64, goarch: riscv64, cc: riscv64-linux-gnu-gcc,    apt: gcc-riscv64-linux-gnu}
           - {artifact: webdb-linux-ppc64le, goarch: ppc64le, cc: powerpc64le-linux-gnu-gcc, apt: gcc-powerpc64le-linux-gnu}
-          - {artifact: webdb-linux-ppc64,   goarch: ppc64,   cc: powerpc64-linux-gnu-gcc -mabi=elfv2, apt: gcc-powerpc64-linux-gnu}
+          # ppc64 (big-endian): в дистрибутивах тулчейн только ELFv1, а
+          # линкер Go генерирует ELFv2 — собираем через zig cc, как loong64.
+          - {artifact: webdb-linux-ppc64,   goarch: ppc64,   cc: zig cc -target powerpc64-linux-gnu, zig: true, experimental: true}
           - {artifact: webdb-linux-s390x,   goarch: s390x,   cc: s390x-linux-gnu-gcc,      apt: gcc-s390x-linux-gnu}
-          # loong64: в репозиториях Ubuntu кросс-gcc нет (только в Debian
-          # trixie+), поэтому C-компилятор — zig cc, адаптер кросс-тулчейна.
+          # loong64: пакета кросс-gcc в репозиториях Ubuntu нет — C-компилятор
+          # берём из zig (адаптер кросс-тулчейна).
           - {artifact: webdb-linux-loong64, goarch: loong64, cc: zig cc -target loongarch64-linux-gnu, zig: true, experimental: true}
           # mips32: Debian/Ubuntu-тулчейн o32 — только hard-float ABI
           # (в sysroot есть stubs-o32_hard.h, но нет stubs-o32_soft.h),
@@ -89,16 +91,19 @@ jobs:
         if: matrix.apt
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
 
-      - name: Кросс-тулчейн (zig для loong64)
+      - name: Кросс-тулчейн (zig — loong64, ppc64)
         if: matrix.zig
         run: |
-          ZIG_VER=0.14.1
-          curl -fsSL -o zig.tar.xz "https://ziglang.org/download/${ZIG_VER}/zig-linux-x86_64-${ZIG_VER}.tar.xz"
-          echo "${ZIG_VER} SHA256:" | tee -a "$GITHUB_STEP_SUMMARY"
-          sha256sum zig.tar.xz | tee -a "$GITHUB_STEP_SUMMARY"
+          # Пин версии и контрольная сумма — официальные ziglang.org/download.
+          # Нужен там, где в apt нет пакета (loong64) или ABI не совпадает
+          # (ppc64: Debian powerpc64-linux-gnu только ELFv1, а Go — ELFv2).
+          ZIG_VER=0.16.0
+          ZIG_SHA=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          curl -fsSL -o zig.tar.xz "https://ziglang.org/download/${ZIG_VER}/zig-x86_64-linux-${ZIG_VER}.tar.xz"
+          echo "${ZIG_SHA}  zig.tar.xz" | sha256sum -c -
           sudo tar -C /opt -xJf zig.tar.xz
-          echo "/opt/zig-linux-x86_64-${ZIG_VER}" >> "$GITHUB_PATH"
-          zig version
+          echo "/opt/zig-x86_64-linux-${ZIG_VER}" >> "$GITHUB_PATH"
+          zig version | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Сборка
         run: go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb
