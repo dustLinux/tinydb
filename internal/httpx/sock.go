@@ -213,19 +213,25 @@ func dialWake(host string, port int) (io.Closer, error) {
 		sa syscall.Sockaddr
 	)
 	if a.Is4() {
-		fd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_NONBLOCK, 0)
+		fd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
 		if err != nil {
 			return nil, err
 		}
 		sa = &syscall.SockaddrInet4{Port: port}
 		copy(sa.(*syscall.SockaddrInet4).Addr[:], a.AsSlice())
 	} else {
-		fd, err = syscall.Socket(syscall.AF_INET6, syscall.SOCK_STREAM|syscall.SOCK_NONBLOCK, 0)
+		fd, err = syscall.Socket(syscall.AF_INET6, syscall.SOCK_STREAM, 0)
 		if err != nil {
 			return nil, err
 		}
 		sa = &syscall.SockaddrInet6{Port: port}
 		copy(sa.(*syscall.SockaddrInet6).Addr[:], a.AsSlice())
+	}
+	// SOCK_NONBLOCK is Linux-only; SetNonblock (fcntl/FIONBIO) is portable
+	// and keeps connect() returning EINPROGRESS instead of blocking.
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		syscall.Close(fd)
+		return nil, err
 	}
 	if err := syscall.Connect(fd, sa); err != nil && err != syscall.EINPROGRESS {
 		syscall.Close(fd)

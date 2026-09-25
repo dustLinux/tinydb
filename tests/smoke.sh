@@ -113,9 +113,13 @@ if [ "$hdr" = "WEBDBENC" ]; then pass=$((pass+1)); echo "  ok   backup encrypted
 echo "== stats/RSS"
 # Порог RSS настраивается (RSS_MAX_KB); дефолт — бюджет 10 МиB из спецификации.
 # CI ставит больший порог: portable-сборка с bundled SQLite и x86-64 дают иной базовый RSS.
-# Замер: берём минимальный из3 (устоявшийся RSS) — разовые выборки дёргаются
-# на страничном кэше общих библиотек (±200 КиБ), бюджет при этом строгий.
+# Перед замером — flush: он запускает штатную purge-цепочку сервера
+# (shrink_memory → mallopt → FreeOSMemory → evictCode); бюджет — это RSS
+# в стабильном состоянии, а не пик между автосейвами.
 RSS_MAX_KB="${RSS_MAX_KB:-10240}"
+j -H "Authorization: Bearer $TOKEN" -X POST "$BASE/v1/flush" >/dev/null
+# Замер: минимальный из3 (устоявшийся RSS) — разовые выборки дёргаются
+# на страничном кэше общих библиотек (±200 КиБ), бюджет при этом строгий.
 ST=""; RSS=""
 for _try in 1 2 3; do
   ST=$(j $BASE/v1/stats)
