@@ -11,7 +11,8 @@
 | Диск ≤ 100 МБ | квота `PRAGMA max_page_count` (`-max-size`) | сервер |
 | Бинарь ≤ 10 МБ | dev (libsqlite3) **4055248**, portable (bundled SQLite) **5407568** | `make build` (size-check) |
 | C-либа ≤ 512 КиБ | `libwebdb.a` 24696, `libwebdb.so` 26072 | `make size-check` |
-| Тесты | smoke **44/44**, security **45/45**, client-go **ok**, C-example **PASS** | `make check` |
+| JS-клиент | ядро 10526 байт (3680 gzip) + типы 4216 | `make clients-js` |
+| Тесты | smoke **44/44**, security **45/45**, client-go **ok**, client-js **11/11**, C-example **PASS** | `make check` |
 
 ## Что построено
 
@@ -25,8 +26,10 @@
 - **Auth**: Bearer/X-API-Key, автотокен `<data>/token`, `-no-auth`.
 - **Write-back (lazy)**: мутации → RAM-оверлей → SQLite пачками →
   шифрованный снапшот (см. `docs/DESIGN.md`).
-- **Клиенты**: `client-go` (чистый net/http, `APIError`), `client-c`
-  (свой HTTP/1.1 поверх TCP, `.a`/`.so`, ≤512 КиБ).
+- **Клиенты**: `client-go` (чистый net/http, `APIError`), `client-js`
+  (CJS-ядро + ESM-обёртка + `.d.ts`, ноль зависимостей, Node ≥18/браузер/
+  Deno/Bun; 10.5 КиБ ядра), `client-c` (свой HTTP/1.1 поверх TCP, `.a`/`.so`,
+  ≤512 КиБ).
 - **Документация (RU)**: `README.md`, `docs/{API,DESIGN,SECURITY,CLIENT-GO,CLIENT-C}.md`.
 - **Сборка/тесты**: корневой `Makefile` (`build/test/run/clients/check/clean`),
   тесты самодостаточны (`tests/lib.sh` поднимает сервер при необходимости).
@@ -78,8 +81,10 @@ query (`net/url` заменён). **Нет DNS** — `-addr` принимает 
   - `test` (ubuntu): `make check` на dev-пути (`-tags libsqlite3` +
     `libsqlite3-dev`) и portable-сборка (bundled SQLite) с повторным
     smoke/security; `RSS_MAX_KB=14336` (x86-64 даёт иной базовый RSS);
-  - `build`: 13 linux-архитектур кросс-gcc, `-trimpath -s -w`;
-    mips/mipsle — `GOMIPS=softfloat`, loong64 — `continue-on-error`;
+  - `build`: 13 linux-архитектур кросс-сборкой; `mips`/`mipsle` — hard-float
+    ABI (дистрибутивный o32-тулчейн только hard-float), `ppc64` — `zig cc`
+    (дистрибутивный даёт ELFv1, Go требует ELFv2), `loong64` — `zig cc`
+    (пакета в Ubuntu нет); оба помечены experimental;
   - `android`: NDK r27c, `arm64` и `arm`+`GOARM=7` (Termux);
   - `macos`: `darwin/arm64` + `darwin/amd64` + запуск (health/stats/шифр.);
   - `release`: на теги `v*` — тарболы всех сборок + `SHA256SUMS`.

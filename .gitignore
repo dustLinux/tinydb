@@ -5,6 +5,10 @@
 *.so
 client-c/example
 
+# JS-клиент
+client-js/node_modules/
+client-js/package-lock.json
+
 # данные сервера и тестов (включая ключи и токены!)
 /data/
 /data-sec/

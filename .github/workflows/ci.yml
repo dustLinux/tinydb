@@ -32,7 +32,7 @@ jobs:
       - name: libsqlite3 (dev-путь сборки)
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
-      - name: make check (gofmt+vet+smoke44+security45+клиенты Go/C)
+      - name: make check (gofmt+vet+smoke44+security45+клиенты Go/C/JS)
         run: make check
 
       - name: portable-сборка (bundled SQLite — как в релизах)

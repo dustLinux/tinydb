@@ -25,7 +25,7 @@ BUILDFLAGS ?= -tags libsqlite3 -gcflags=all=-B -ldflags "-s -w"
 BIN_MAX := 10485760
 
 .PHONY: all build run test vet fmt-check smoke clients clients-go clients-c \
-        check clean
+        clients-js check clean
 
 all: build
 
@@ -68,7 +68,13 @@ clients-c:
 	$(MAKE) -C client-c all size-check
 	bash tests/c-example.sh
 
-clients: clients-go clients-c
+# JS: тесты tinydb-client (node:test) против живого bin/webdb. Нужен node ≥18.
+clients-js:
+	@command -v node >/dev/null 2>&1 || { echo "SKIP clients-js: node не найден"; exit 0; }
+	@printf 'ok   client-js: %s байт (ядро)\n' "$$(wc -c < client-js/lib/tinydb.js)"
+	cd client-js && npm test --silent
+
+clients: clients-go clients-c clients-js
 
 test: fmt-check vet smoke security clients
 

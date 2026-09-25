@@ -1,0 +1,25 @@
+{
+  "name": "tinydb-client",
+  "version": "0.1.0",
+  "description": "JS/TS-клиент tinydb REST API: ноль зависимостей, Node.js ≥18, браузер, Deno, Bun",
+  "keywords": ["tinydb", "sqlite", "rest", "client", "database", "embedded"],
+  "license": "BSD-3-Clause",
+  "repository": { "type": "git", "url": "git+https://github.com/dustlinux/tinydb.git", "directory": "client-js" },
+  "homepage": "https://github.com/dustlinux/tinydb/tree/main/client-js",
+  "type": "commonjs",
+  "main": "./lib/tinydb.js",
+  "module": "./lib/tinydb.mjs",
+  "types": "./lib/tinydb.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/tinydb.d.ts",
+      "import": "./lib/tinydb.mjs",
+      "require": "./lib/tinydb.js"
+    }
+  },
+  "files": ["lib", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

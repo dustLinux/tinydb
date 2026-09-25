@@ -44,9 +44,16 @@ func main() {
 }
 ```
 
-Клиент — только stdlib (`net/http`, `encoding/json`), никаких зависимостей.
-Подробнее — [docs/CLIENT-GO.md](docs/CLIENT-GO.md); для C —
-[docs/CLIENT-C.md](docs/CLIENT-C.md).
+Клиенты — все без зависимостей:
+
+- **Go** — только stdlib (`net/http`, `encoding/json`):
+  `go get github.com/dustlinux/tinydb/client-go`, подробнее
+  [docs/CLIENT-GO.md](docs/CLIENT-GO.md);
+- **JS/TS** — ноль зависимостей, Node.js ≥18 / браузер / Deno / Bun, типы
+  из коробки: `npm install tinydb-client`, подробнее
+  [client-js/README.md](client-js/README.md);
+- **C** — своя реализация HTTP/1.1, `.a`/`.so` ≤512 КиБ:
+  [docs/CLIENT-C.md](docs/CLIENT-C.md).
 
 ### Сервер
 
@@ -88,12 +95,17 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 | `darwin` | `arm64`, `amd64` (macOS) |
 | `android` | `arm64`, `armv7` — то, что нужно Termux (aarch64 / armv7) |
 
-Сборки cgo: Linux — кросс-gcc из apt (`mips`/`mipsle` собираются под
-hard-float ABI, как в дистрибутивах; `ppc64` требует `-mabi=elfv2`,
-как и требует линкер Go), macOS — родной `clang` (плюс `-arch
-x86_64`), Android — NDK clang. Для `loong64` (нет пакета в репозиториях
-Ubuntu) используется `zig cc`; джоб помечен экспериментальным и не роняет
-CI, если сборка не удастся. Windows намеренно не поддерживается.
+Сборки cgo: Linux — кросс-gcc из apt; там, где дистрибутивный тулчейн не
+подходит, используется `zig cc` (проверенные версия и SHA-256):
+- `mips`/`mipsle` — hard-float ABI (дистрибутивный o32-тулчейн только
+  hard-float; soft-float требует отсутствующий `stubs-o32_soft.h`);
+- `ppc64` — big-endian, нужен ELFv2: дистрибутивный `powerpc64-linux-gnu`
+  только ELFv1 (нет `stubs-64-v2.h`), а линкер Go генерирует ELFv2;
+- `loong64` — пакета кросс-gcc в репозиториях Ubuntu нет вовсе.
+
+macOS — родной `clang` (плюс `-arch x86_64`), Android — NDK clang. Джобы
+`ppc64`/`loong64` помечены experimental: не роняют CI, если тулчейн
+недоступен. Windows намеренно не поддерживается.
 
 ## Как это работает
 
@@ -152,7 +164,7 @@ CI, если сборка не удастся. Windows намеренно не �
 ## Тесты
 
 ```sh
-make test    # gofmt + vet + smoke (44) + security (45) + клиенты Go/C
+make test    # gofmt + vet + smoke (44) + security (45) + клиенты Go/C/JS
 make check   # то же + контроль размеров (бинарь ≤10 МиБ, C-клиент ≤512 КиБ)
 ```
 
@@ -179,6 +191,7 @@ CI (GitHub Actions) гоняет `make check`-набор на Ubuntu, допол
 │   ├── store/           движок: SQLite + write-back overlay + flush/evict
 │   └── server/          REST-хендлеры v1, auth, stats
 ├── client-go/           Go-клиент (github.com/dustlinux/tinydb/client-go)
+├── client-js/           JS/TS-клиент (tinydb-client, CJS+ESM+типы, без сборки)
 ├── client-c/            C-клиент (libwebdb.a/.so) + example
 ├── tests/               smoke.sh, security.sh, c-example.sh, lib.sh
 ├── .github/workflows/   CI: тесты + сборки всех архитектур + releases
