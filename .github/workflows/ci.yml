@@ -1,0 +1,218 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # ---------------------------------------------------------------- тесты
+  test:
+    name: test (ubuntu)
+    runs-on: ubuntu-latest
+    env:
+      # Порог RSS выше термуксовых 10240: bundled SQLite и x86-64 дают иной
+      # базовый RSS. Строгий бюджет 10240 крутится на устройстве (Termux).
+      RSS_MAX_KB: '14336'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+
+      - name: libsqlite3 (dev-путь сборки)
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - name: make check (gofmt+vet+smoke44+security45+клиенты Go/C)
+        run: make check
+
+      - name: portable-сборка (bundled SQLite — как в релизах)
+        run: make build GOFLAGS='-gcflags=all=-B -ldflags "-s -w"'
+
+      - name: smoke + security на portable-сборке
+        run: |
+          bash tests/smoke.sh
+          bash tests/security.sh
+
+  # ------------------------------------------------------------ linux cgo
+  build:
+    name: linux ${{ matrix.artifact }}
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {artifact: webdb-linux-amd64,   goarch: amd64,   cc: gcc}
+          - {artifact: webdb-linux-386,     goarch: '386',   cc: i686-linux-gnu-gcc,       apt: gcc-i686-linux-gnu}
+          - {artifact: webdb-linux-arm64,   goarch: arm64,   cc: aarch64-linux-gnu-gcc,    apt: gcc-aarch64-linux-gnu}
+          - {artifact: webdb-linux-armv7,   goarch: arm,     goarm: '7', cc: arm-linux-gnueabihf-gcc, apt: gcc-arm-linux-gnueabihf}
+          - {artifact: webdb-linux-riscv64, goarch: riscv64, cc: riscv64-linux-gnu-gcc,    apt: gcc-riscv64-linux-gnu}
+          - {artifact: webdb-linux-ppc64le, goarch: ppc64le, cc: powerpc64le-linux-gnu-gcc, apt: gcc-powerpc64le-linux-gnu}
+          - {artifact: webdb-linux-ppc64,   goarch: ppc64,   cc: powerpc64-linux-gnu-gcc,  apt: gcc-powerpc64-linux-gnu}
+          - {artifact: webdb-linux-s390x,   goarch: s390x,   cc: s390x-linux-gnu-gcc,      apt: gcc-s390x-linux-gnu}
+          # loong64: кросс-gcc есть не во всех релизах Ubuntu — экспериментальный.
+          - {artifact: webdb-linux-loong64, goarch: loong64, cc: loongarch64-linux-gnu-gcc, apt: gcc-loongarch64-linux-gnu, experimental: true}
+          # Для mips32 мягкий ABI совпадает с Debian/Ubuntu-тулчейном.
+          - {artifact: webdb-linux-mips64le, goarch: mips64le, cc: mips64el-linux-gnuabi64-gcc, apt: gcc-mips64el-linux-gnuabi64}
+          - {artifact: webdb-linux-mips64,   goarch: mips64,   cc: mips64-linux-gnuabi64-gcc,   apt: gcc-mips64-linux-gnuabi64}
+          - {artifact: webdb-linux-mipsle,   goarch: mipsle,   cc: mipsel-linux-gnu-gcc,      apt: gcc-mipsel-linux-gnu, gomips: softfloat}
+          - {artifact: webdb-linux-mips,     goarch: mips,     cc: mips-linux-gnu-gcc,          apt: gcc-mips-linux-gnu,      gomips: softfloat}
+    env:
+      CGO_ENABLED: '1'
+      GOOS: linux
+      GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm }}
+      GOMIPS: ${{ matrix.gomips }}
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+
+      - name: Кросс-тулчейн
+        if: matrix.apt
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Сборка
+        run: go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb
+
+      - name: Отчёт
+        run: file "bin/${{ matrix.artifact }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bin/${{ matrix.artifact }}
+          retention-days: 14
+
+  # ------------------------------------------------------- android (Termux)
+  android:
+    name: android ${{ matrix.goarch }}
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goarch: arm64, ccbin: aarch64-linux-android21-clang, artifact: webdb-android-arm64}
+          - {goarch: arm, goarm: '7', ccbin: armv7a-linux-androideabi21-clang, artifact: webdb-android-armv7}
+    env:
+      CGO_ENABLED: '1'
+      GOOS: android
+      GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+
+      - name: Сборка (NDK clang)
+        run: |
+          export CC="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.ccbin }}"
+          "$CC" --version
+          go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb
+          file "bin/${{ matrix.artifact }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bin/${{ matrix.artifact }}
+          retention-days: 14
+
+  # -------------------------------------------------------------- darwin
+  macos:
+    name: darwin (arm64 + amd64, smoke)
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+
+      - name: Сборка darwin/arm64 (родная)
+        run: go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o bin/webdb-darwin-arm64 ./cmd/webdb
+
+      - name: Сборка darwin/amd64 (clang -arch x86_64)
+        env:
+          CGO_ENABLED: '1'
+          GOOS: darwin
+          GOARCH: amd64
+          CC: clang -arch x86_64
+        run: go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o bin/webdb-darwin-amd64 ./cmd/webdb
+
+      - name: Запуск arm64-бинарника (health, stats, шифрование на выходе)
+        run: |
+          chmod +x bin/webdb-darwin-arm64
+          ./bin/webdb-darwin-arm64 -addr 127.0.0.1:18099 -data ./data-ci > server.log 2>&1 &
+          PID=$!
+          ok=""
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:18099/health >/dev/null; then ok=1; break; fi
+            sleep 0.25
+          done
+          test -n "$ok"
+          TOKEN=$(cat data-ci/token)
+          curl -sf -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18099/v1/stats >/dev/null
+          kill -TERM "$PID"
+          wait "$PID"
+          test -f data-ci/db.sqlite.enc
+          head -c 8 data-ci/db.sqlite.enc | grep -q WEBDBENC
+          echo "darwin/arm64: health+stats+encryption ok" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webdb-darwin
+          path: bin/webdb-darwin-*
+          retention-days: 14
+
+  # ------------------------------------------------------------ релиз v*
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, android, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Упаковка тарбол + SHA256SUMS
+        run: |
+          cd dist
+          for d in */; do
+            name=$(basename "$d")
+            tar -czf "../${name}.tar.gz" -C "$d" .
+          done
+          cd ..
+          sha256sum *.tar.gz > SHA256SUMS
+          ls -la *.tar.gz SHA256SUMS
+
+      - name: gh release create
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" *.tar.gz SHA256SUMS --generate-notes --title "$GITHUB_REF_NAME"

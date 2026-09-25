@@ -1,0 +1,226 @@
+# DESIGN.md — архитектура tinydb
+
+## Обзор
+
+```
+клиент (Go lib / C lib / curl)
+        │  HTTP/1.1 (Bearer)
+        ▼
+internal/httpx        ← свой минималистичный HTTP: raw-сокеты (syscall),
+        │               парсер запросов/ответов, chunked, deadline'ы
+        ▼
+internal/server       ← REST v1: маршрутизация, auth, JSON, stats
+        │
+        ▼
+internal/store        ← движок: write-back overlay ──▶ SQLite (system lib)
+        │                     │                        через cgo
+        │                     └─ overlay (FIFO буфер)      
+        ▼
+internal/cryptobox    ← потоковое AES-256-GCM, контейнер WEBDBENC
+```
+
+Рантайм: Go 1.27, `GOOS=android` (Termux), динамическая линковка с
+системным SQLite (`-tags libsqlite3`, `github.com/mattn/go-sqlite3`).
+
+## Почему свой HTTP, а не net/http
+
+Первоначальный бинарь на `net/http` весил 4.89 МБ и ~10.5 МБ RSS.
+Профилирование (`nm` по text-сегментам) показало, что избыточность —
+в подсистемах, которые встраиваемому серверу не нужны. Отказ пошёл по
+списку экономии:
+
+| Убрано | Экономия text | Замена |
+|---|---|---|
+| `regexp` | ~257 КБ | ручные валидаторы имён (`nameOK`, паттерны полей) |
+| `log/slog` | ~117 КБ | `internal/logx` — тот же формат `key=value`, API Info/Warn/Error/Debug |
+| `net` (в httpx) | ~395 КБ | `internal/httpx/sock.go`: `Conn` поверх non-blocking fd + `os.File`-поллер для deadline'ов, свой `Listener` с wake-self-connect при `Close` |
+| `net/url` (в server) | — | `internal/httpx/query.go`: `Values`/`parseQuery`/`pathUnescape` |
+| `-gcflags=all=-B` | ~77 КБ | выключение проверок границ во всех пакетах |
+| `-ldflags "-s -w"` | — | стрип символов/дебага |
+
+Итог: бинарь 4.89 → **4.04 МБ**.
+
+Ограничения, которые из этого следуют (осознанные, а не баги):
+
+- **Нет DNS.** `-addr` принимает только IP-литерал или `localhost`
+  (резолвится в 127.0.0.1 без DNS). Клиентам — ходить по IP.
+- **HTTP/1.1 без фич**: нет HTTP/2, keep-alive управляется заголовком
+  клиента, тело — `Content-Length` или chunked, ответы >64 КиБ —
+  chunked. Этого хватает для локального API.
+- `net/netip` оставлен: нужен для разбора адреса, компактен.
+- `net/url` всё равно попадает в бинарь через DSN-парсер
+  `mattn/go-sqlite3` — выкинуть его из линковки нельзя без замены
+  драйвера.
+
+Транспорт (`sock.go`) покрыт тем же smoke, что и был на `net`: deadline'ы,
+чанки >64 КиБ, chunked-декод — 44/44.
+
+## Write-back («сначала в RAM, потом запись»)
+
+Файл: `internal/store/writeback.go`.
+
+Мутации (`PutDoc`, `DelDoc`, `CreateCollection`, `CreateIndex`,
+`DropIndex`) не пишут в SQLite, а попадают в **FIFO-оверлей** в RAM
+(за `store.mu`). Клиент получает ответ сразу — это и есть смысл
+lazy-режима: запись не ждёт ни диска, ни шифрования.
+
+```
+mutation ──▶ overlay (pend[], pendBytes) ──apply──▶ SQLite tx ──flush──▶ .enc
+                 ▲                                      │
+   Get(): overlay первый                                │
+   List/SQL/Export: apply-барьер перед чтением ─────────┘
+```
+
+Оверлей применяется в SQLite **одной транзакцией** (FIFO, все или ничего)
+когда срабатывает любое из событий:
+
+1. **тикер** `-writeback N` (по умолчанию 1s; `0` — только пункты 2–6);
+2. **read-barrier** — чтения обязаны видеть принятые мутации:
+   `ListCollections`, `Collection`, `List` (доки), `ListIndexes`, SQL,
+   `Export`, `DropCollection`;
+3. **лимит буфера** — `-buffer-bytes` (1 МиБ) или `-buffer-items`
+   (10000): переполнение → синхронный apply этого запроса;
+4. `POST /v1/flush`;
+5. **autosave** (`-autosave`, по умолчанию 60s) — перед шифрованием;
+6. **graceful shutdown** (SIGINT/SIGTERM).
+
+Свежесть отдельной записи гарантируется без барьера: `Get()` проверяет
+оверлей первым и отдаёт версию из RAM. Поэтому
+`GET /v1/collections/{coll}/docs/{id}` барьер не ставит (иначе каждый
+get обнулял бы буфер и write-back терял смысл). `GET /v1/stats` тоже не
+барьер — непустой буфер виден в полях `buffer_items`/`buffer_bytes`.
+
+Ответы мутаций несут `flushed: false` (+ заголовок `X-Webdb-Flushed`), когда
+мутация ещё в RAM. Read-barrier-методы отвечают `flushed: true`.
+
+### Долговечность (важно!)
+
+- **SIGINT/SIGTERM** — штатное завершение: drain буфера → flush →
+  шифрованный снапшот → `bye (encrypted snapshot saved)`. Ничего не
+  теряется.
+- **SIGKILL / смерть процесса** — теряется то, что лежало в оверлее:
+  до интервала `-writeback` (1s по умолчанию) мутаций. Это осознанный
+  компромисс lazy-режима; для режима «ноль потерь на убийство» ставьте
+  `-writeback 0` и чаще зовите `POST /v1/flush`, либо принимайте
+  синхронный путь через переполнение буфера.
+- overlay ограничен (`-buffer-bytes`/`-buffer-items`), поэтому RAM под
+  буфер не утекает: переполнение — apply.
+
+`Close()` (под `closeMu`): дождаться текущего apply → дренировать хвост →
+flush → пометить закрытым. Гонки drain/flush устранены.
+
+## Хранение и шифрование
+
+- Пока сервер жив — `data/db.sqlite` plaintext (файлы 0600, каталог 0700).
+  Это must-have: SQLite пишет мимо процесса иначе не умеет.
+- На старте: нет `.enc` → первая инициализация; есть → расшифровать в
+  `db.sqlite`.
+- Flush/autosave/shutdown: `db.sqlite` → стрим в `.<name>.tmp`
+  (AES-256-GCM, чанки 64 КиБ) → `fsync` → `rename` (атомарно) →
+  по умолчанию удалить plaintext (`-keep-plain=false`).
+
+Детали формата и угрозы — [SECURITY.md](SECURITY.md).
+
+## RAM-бюджет (лимит 10 МБ)
+
+Три уровня мер:
+
+**1. Не растить.**
+- SQLite: `PRAGMA cache_size = -N` (64 КиБ на соединение), пул
+  `SetMaxOpenConns(2)/SetMaxIdleConns(1)` (кэш — на соединение, лишние
+  соединения — лишние кэши).
+- Go: `GOMEMLIMIT=2MiB` (`-go-memlimit`), `GOGC=30`.
+- Каждое соединение httpx: reader 16 КиБ, writer 8 КиБ.
+- Буфер write-back ограничен 1 МиБ / 10000.
+
+**2. Re-exec с нужным окружением.** На GOOS=android рантайм по умолчанию
+отдаёт страницы через `MADV_FREE` (лениво, RSS не падает сразу).
+`//go:debug madvdontneed=1` в исходнике не компилируется, поэтому
+`main()` при первом запуске перезапускает себя через `exec` с
+`GODEBUG=madvdontneed=1` в окружении — тогда освобождение идёт через
+`MADV_DONTNEED` и RSS падает сразу. При этом же re-exec **выбрасывается
+`LD_PRELOAD`**: shim termux-exec (динамический линкер подсовывает
+`/data/data/com.termux/files/usr/bin/exec`) занимает ~52 КБ RSS, а сервер
+никого не исполняет — он не нужен. Повторный re-exec отсекается
+флагом-маркером в окружении.
+
+**3. Отдавать память после бёрстов** — в конце `Flush()` (тон):
+1. `PRAGMA shrink_memory` — освободить кэш/lookaside страниц SQLite;
+2. `mallopt(M_PURGE_ALL, 0)` (cgo, `store/purge_cgo.go`) — отдать
+   закэшированные страницы C-аллокатора ОС. Заголовок bionic прячет
+   `mallopt` за `__BIONIC_AVAILABILITY_GUARD(26)`, который cgo-
+   препроцессор не удовлетворяет, поэтому прототип объявлен вручную
+   (в библиотеке символ есть с API 26). Без cgo — no-op
+   (`purge_stub.go`).
+3. `debug.FreeOSMemory()` — GC + scavenger, отдать пустые span'ы Go;
+4. `evictCode()` (`store/evict.go`) — `madvise(MADV_DONTNEED)` по r-x
+   участкам **собственного** бинаря. Код — чистые file-backed страницы
+   (на код ничего не пишет), ядро может их выгрузить в любой момент по
+   давлению на память; мы лишь делаем это заранее. Следующий вызов
+   функции честно fault-назад из page cache. Зачем: exe весит ~4 МБ,
+   после бёрста резидентно ~3.5 МБ, из них реально «горячими» оказываются
+   считанные сотни КиБ.
+
+   Участки находятся по `/proc/self/maps`, сопоставление — **по inode**
+   (путь ненадёжен: на Android `/data/data` — симлинк на `/data/user/0`,
+   и в maps может быть любая форма). Во внимание берётся только `r-x`:
+   `rw-` (релокейтированные данные) и `r--` (COW-релокейтированный
+   rodata) выгружать нельзя — они не восстановятся из файла.
+
+**Контроль.** `GET /v1/stats → rss_kb` читает `VmRSS` из
+`/proc/self/status`. Смоук-тест требует `rss_kb ≤ 10240` в конце всей
+нагрузки; фактически ~9976. Около 6 МБ из этого — file-backed
+(бинарь + libc + libc++ + libsqlite3 + linker + properties): это
+системные страницы, разделяемые между процессами и выгружаемые ядром при
+давлении. Пол «даже `sleep` тут занимает 5.2 МБ RSS» — пол корректный,
+потолок задан аллокаторами Android, а не нашим кодом.
+
+## Почему RSS не «сливается» сам
+
+Измерения до/после нагрузки (smaps-diff) показали: приходится ~2.5 МБ
+анон-памяти — Go-куча в активных span'ах (фрагментация после импорта
+1.2 МБ JSON), кэш malloc (SQLite) и thread-стеки. `heap_alloc` при этом
+~0.5 МБ. Без мер из шага «отдавать память после бёрстов» flush возвращал
+только ~280 КБ, и RSS после smoke доходил до 11.5 МБ (>10240 → FAIL).
+Сейчас после бёрста+flush — 9.1–9.9 МБ.
+
+## HTTP-ядро (internal/httpx)
+
+- `sock.go` — `Conn`: non-blocking `socket()`/`connect()`/`read()`/
+  `write()` на raw-сокетах; deadlines через `os.File`-поллер (runtime
+  poller, тот же механизм, что у `net`), т.е. блокирующие операции не
+  занимают OS-потоки. `Listener` — `bind/listen` + «пробуждение» через
+  self-connect при `Close()`, чтобы accept-цикл проснулся.
+- `server.go` — парсер запроса (request line, заголовки, `Content-Length`
+  / чанкованное тело), маршруты с `{param}`, writer с буферизацией 64 КиБ
+  и автоматическим chunked для больших ответов, `Expect: 100-continue`.
+- `query.go` — `Values`, `parseQuery`, `pathUnescape` (замена `net/url`).
+
+Лимиты: тело запроса `-max-body` (4 МиБ по умолчанию), импорт
+`-max-import` (64 МиБ по умолчанию, стримится с проверкой лимита на чтение),
+ответы теоретически не ограничены (стриминг).
+
+## Логирование
+
+`internal/logx` — минимум: `Debug/Info/Warn/Error(msg, kv...)`, вывод
+`time=... level=INFO msg=... key=value` (формат совместим со сложившимся
+`log/slog`-выводом). Уровень — по наличию `-v` (см. main).
+
+## Тесты
+
+- `tests/smoke.sh` — 44 e2e-проверки: health/auth, CRUD, фильтры,
+  сортировка, SQL RO (+ отказ записи), индексы, chunked >64 КиБ,
+  экспорт/импорт, write-back (`buffer_items`, `flushed:false`,
+  read-barrier-дрейн, `buffer_applies` от flush), бэкап с заголовком
+  `WEBDBENC`, **RSS ≤ 10240**.
+- `client-go`: интеграционный `go test` против живого сервера.
+- `client-c`: `make test` — example против живого сервера + size-check.
+
+## Известные ограничения
+
+- Нет репликации, нет WAL-подобного чтения из нескольких процессов —
+  сервер один, это встраиваемая БД.
+- SIGKILL теряет write-back буфер (см. выше).
+- SQL — только чтение (осознанно: весь мутационный путь — через API,
+  где работает overlay и квоты).
+- Свой HTTP не умеет HTTP/2, DNS, произвольных методов проксирования.

@@ -1,0 +1,4 @@
+# временные файлы тестов
+*.tmp
+/tmp-*.json
+tests/tmp-*.json
