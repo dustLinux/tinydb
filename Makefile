@@ -14,18 +14,21 @@ GO      ?= go
 BIN     := bin/webdb
 ADDR    ?= 127.0.0.1:8099
 DATA    ?= ./data
-# -tags libsqlite3: динамическая линковка с системным SQLite (RAM/размер).
-# -gcflags=all=-B: без проверок границ в пакетах (~77KiB text).
-# -ldflags "-s -w": стрип symtab/debug.
+# -tags libsqlite3: динамическая линковка с системным SQLite (меньше бинарь,
+#   проще статическая сборка; на диск/сеть это не влияет).
+# -ldflags "-s -w": стрип symtab/debug из файла (в RSS не попадает).
+# -gcflags=all=-B намеренно НЕ используется: это оптимизация размера, а размер
+#   сервера не в приоритете — важна память. Побочный эффект -B был ещё и
+#   небезопасным: отключает проверки границ в том числе в парсере HTTP.
 # Имя BUILDFLAGS, а не GOFLAGS: make экспортирует command-line-переменные
-# в окружение recipe, а Go читает свой $GOFLAGS оттуда же (и без кавычек) —
-# получалось «unknown flag -s -w». Portable-сборка в CI: make build BUILDFLAGS='...'
-BUILDFLAGS ?= -tags libsqlite3 -gcflags=all=-B -ldflags "-s -w"
+# в окружение recipe, а Go читает свой $GOFLAGS оттуда (и без кавычек).
+# Portable-сборка в CI: make build BUILDFLAGS='-ldflags "-s -w"'
+BUILDFLAGS ?= -tags libsqlite3 -ldflags "-s -w"
 # Лимит бинаря (байт) — лимит из README «Лимиты».
 BIN_MAX := 10485760
 
 .PHONY: all build run test vet fmt-check smoke clients clients-go clients-c \
-        clients-js check clean
+        clients-js clients-jwt shell check clean
 
 all: build
 
@@ -37,6 +40,21 @@ build:
 		echo "FAIL bin/webdb = $$sz > $(BIN_MAX)"; exit 1; \
 	fi; \
 	echo "ok   bin/webdb = $$sz bytes (<= 10MiB)"
+
+# Консоль (в духе sqlite3). Живёт отдельно от сервера, чтобы не раздувать его.
+shell:
+	$(GO) build $(BUILDFLAGS) -o bin/webdb-shell.tmp ./cmd/webdb-shell
+	mv bin/webdb-shell.tmp bin/webdb-shell
+	@sz=$$(wc -c < bin/webdb-shell); \
+	if [ "$$sz" -gt $(BIN_MAX) ]; then \
+		echo "FAIL bin/webdb-shell = $$sz > $(BIN_MAX)"; exit 1; \
+	fi; \
+	echo "ok   bin/webdb-shell = $$sz bytes (<= 10MiB)"
+
+# Тесты JWT: юнит-тесты пакета + e2e (выпуск токена → сервер принимает/отвергает).
+clients-jwt:
+	$(GO) test ./internal/auth/
+	bash tests/jwt.sh
 
 run: build
 	./$(BIN) -addr $(ADDR) -data $(DATA) -writeback 1s
@@ -74,10 +92,13 @@ clients-js:
 	@printf 'ok   client-js: %s байт (ядро)\n' "$$(wc -c < client-js/lib/tinydb.js)"
 	cd client-js && npm test --silent
 
-clients: clients-go clients-c clients-js
+# Консоль: сценарии в духе sqlite3 против живого сервера.
+shell-test: shell
+	bash tests/shell.sh
+
+clients: clients-go clients-c clients-js clients-jwt shell-test
 
 test: fmt-check vet smoke security clients
-
 # Полная верификация: свежая сборка + все тесты.
 check: build test
 	@echo "CHECK: ok (bin/webdb $$(wc -c < $(BIN)) bytes)"

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dustlinux/tinydb/internal/auth"
 	"github.com/dustlinux/tinydb/internal/logx"
 	"io"
 	"os"
@@ -34,6 +35,9 @@ type Config struct {
 	MaxImport int64  // max /v1/import upload bytes, streamed (default 64 MiB)
 	CORS      bool
 	Logger    *logx.Logger
+	// JWT — проверка подписанных токенов. Непустой Secret включает приём JWT
+	// в дополнение к статическому токену (см. internal/auth).
+	JWT auth.Config
 }
 
 // New builds the HTTP handler.
@@ -145,10 +149,12 @@ func (s *server) cors(next httpx.Handler) httpx.Handler {
 }
 
 func (s *server) auth(next httpx.Handler) httpx.Handler {
-	if s.cfg.Token == "" {
+	// -no-auth: пуст и статический токен, и JWT выключены.
+	if s.cfg.Token == "" && !s.cfg.JWT.Enabled() {
 		return next
 	}
 	want := sha256hex(s.cfg.Token)
+	jwtOK := s.cfg.JWT.Enabled()
 	return func(w *httpx.Response, r *httpx.Request) {
 		if r.Path == "/health" {
 			next(w, r)
@@ -160,11 +166,23 @@ func (s *server) auth(next httpx.Handler) httpx.Handler {
 		} else if k := r.Header.Get("X-API-Key"); k != "" {
 			got = k
 		}
-		if subtle.ConstantTimeCompare(sha256hex(got), want) != 1 {
-			w.Fail(httpx.StatusUnauthorized, "missing or invalid token")
+		// Статический токен (по умолчанию) либо подписанный JWT.
+		if s.cfg.Token != "" && subtle.ConstantTimeCompare(sha256hex(got), want) == 1 {
+			next(w, r)
 			return
 		}
-		next(w, r)
+		if jwtOK && got != "" {
+			if claims, err := s.cfg.JWT.Verify(got); err == nil {
+				s.log.Debug("jwt accepted", "sub", claims.Subject, "iss", claims.Issuer, "jti", claims.ID)
+				next(w, r)
+				return
+			} else {
+				// Причина не пишется в ответ: клиенту незачем знать, чем именно
+				// токен не подошёл (подпись/срок/аудитория).
+				s.log.Debug("jwt rejected", "err", err)
+			}
+		}
+		w.Fail(httpx.StatusUnauthorized, "missing or invalid token")
 	}
 }
 

@@ -18,12 +18,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dustlinux/tinydb/internal/auth"
 	"github.com/dustlinux/tinydb/internal/httpx"
 	"github.com/dustlinux/tinydb/internal/server"
 	"github.com/dustlinux/tinydb/internal/store"
 )
 
 func main() {
+	// Подкоманда `webdb token` — выпуск JWT. Работает без запуска сервера и
+	// без каталога данных: нужен только секрет.
+	if len(os.Args) > 1 && os.Args[1] == "token" {
+		os.Exit(runTokenCmd(os.Args[2:]))
+	}
 	// On GOOS=android the Go runtime defaults to MADV_FREE: freed pages stay
 	// accounted in RSS until the kernel reclaims them, which breaks the 10 MiB
 	// budget. GODEBUG is only read at exec time, so re-exec once with
@@ -70,6 +76,11 @@ func main() {
 		keyFile    = flag.String("key-file", "", "32-byte key file (default <data>/db.key)")
 		passEnv    = flag.String("passphrase", "", "encrypt with passphrase instead of key file (prefer env WEBDB_PASSPHRASE)")
 		passFile   = flag.String("passphrase-file", "", "read passphrase from file")
+		jwtSecret  = flag.String("jwt-secret", "", "also accept signed JWTs (HS256; prefer env WEBDB_JWT_SECRET)")
+		jwtSecretF = flag.String("jwt-secret-file", "", "read JWT secret from file")
+		jwtIssuer  = flag.String("jwt-issuer", "", "require JWT claim 'iss' to equal this")
+		jwtAud     = flag.String("jwt-audience", "", "require JWT claim 'aud' to contain this")
+		jwtLeeway  = flag.Duration("jwt-leeway", 30*time.Second, "clock skew allowance for exp/nbf")
 	)
 	flag.Parse()
 
@@ -162,6 +173,29 @@ func main() {
 	go st.Autosave(*autosave, stopAuto)
 	go st.Writeback(*writeback, stopWB)
 
+	// JWT (необязательно): принимать подписанные токены в дополнение к статиченому.
+	jwtCfg := auth.Config{Issuer: *jwtIssuer, Audience: *jwtAud, Leeway: *jwtLeeway}
+	if s := auth.SecretFromEnv("WEBDB_JWT_SECRET"); len(s) > 0 && *jwtSecret == "" && *jwtSecretF == "" {
+		jwtCfg.Secret = s
+	}
+	if *jwtSecret != "" {
+		jwtCfg.Secret = []byte(*jwtSecret)
+	}
+	if *jwtSecretF != "" {
+		b, err := auth.SecretFromFile(*jwtSecretF)
+		if err != nil {
+			log.Error("read jwt secret file", "err", err)
+			os.Exit(1)
+		}
+		jwtCfg.Secret = b
+	}
+	if jwtCfg.Enabled() && len(jwtCfg.Secret) < 16 {
+		log.Warn("JWT secret is shorter than 16 bytes — HMAC key is weak")
+	}
+	if !*noAuth && jwtCfg.Enabled() {
+		log.Info("JWT auth enabled", "issuer", jwtCfg.Issuer, "audience", jwtCfg.Audience)
+	}
+
 	h := server.New(server.Config{
 		Store:     st,
 		Token:     token,
@@ -169,6 +203,7 @@ func main() {
 		MaxImport: *maxImport << 20,
 		CORS:      *cors,
 		Logger:    log,
+		JWT:       jwtCfg,
 	})
 	srv := httpx.NewServer(httpx.ServerConfig{
 		Addr:     *addr,
