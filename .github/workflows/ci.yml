@@ -209,37 +209,6 @@ jobs:
           path: bin/webdb-darwin-*
           retention-days: 14
 
-  # ------------------------------------------------------- консоль webdb-shell
-  shell:
-    name: shell (webdb-shell)
-    if: github.event_name != 'pull_request'
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {artifact: webdb-shell-linux-amd64, goos: linux, goarch: amd64}
-          - {artifact: webdb-shell-linux-arm64, goos: linux, goarch: arm64}
-          - {artifact: webdb-shell-darwin-arm64, goos: darwin, goarch: arm64}
-          - {artifact: webdb-shell-darwin-amd64, goos: darwin, goarch: amd64}
-    runs-on: ${{ matrix.goos == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
-    env:
-      CGO_ENABLED: '0'          # консоль — чистый Go, cgo не нужен
-      GOOS: ${{ matrix.goos }}
-      GOARCH: ${{ matrix.goarch }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.27.x'
-      - name: Сборка консоли
-        run: go build -trimpath -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb-shell
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: bin/${{ matrix.artifact }}
-          retention-days: 14
-
   # --------------------------------------------------- скилл для ИИ-агентов
   agent-skill:
     name: agent skill (SKILL.md)
@@ -269,7 +238,7 @@ jobs:
   release:
     name: release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, android, macos, shell, agent-skill]
+    needs: [build, android, macos, agent-skill]
     runs-on: ubuntu-latest
     permissions:
       contents: write

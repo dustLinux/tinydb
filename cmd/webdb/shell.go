@@ -1,14 +1,19 @@
-// Command webdb-shell — интерактивная консоль к tinydb, по духу sqlite3.
+// Подкоманда `webdb shell` — интерактивная консоль к tinydb, по духу sqlite3.
 //
-//	$ webdb-shell
+//	$ webdb shell
 //	tinydb> .tables
 //	tinydb> SELECT count(*) AS n FROM docs;
 //	tinydb> put users u1 {"name":"alice"}
 //	tinydb> ls users
 //
+// Живёт внутри того же бинаря, что и сервер: отдельная программа тащила бы
+// с собой ещё одну копию HTTP-клиента, а здесь они делят и код, и тесты. На
+// размер бинаря сервера пофиг (важна память), а памяти консоль серверу не
+// добавляет — это другой кодовый путь, его страницы не трогаются.
+//
 // Работает поверх HTTP API, поэтому умеет всё, что умеет сервер, и ровно тем же
-// способом (никакого «локального режима» с другими правилами). Токен берётся из
-// -token, из env WEBDB_TOKEN или из <data>/token рядом с бинарём.
+// способом (никакого «локального режима» с другими правилами). Токен берётся
+// из -token, из env WEBDB_TOKEN или из <data>/token.
 package main
 
 import (
@@ -24,6 +29,7 @@ import (
 	"time"
 
 	"github.com/dustlinux/tinydb/internal/httpx"
+	"github.com/dustlinux/tinydb/internal/server"
 )
 
 type client struct {
@@ -33,26 +39,28 @@ type client struct {
 	mode   string // column | list | json
 }
 
-func main() {
+// runShell — точка входа подкоманды `webdb shell`.
+func runShell(args []string) int {
+	fs := flag.NewFlagSet("shell", flag.ContinueOnError)
 	var (
-		addr    = flag.String("addr", "127.0.0.1:8080", "server address")
-		token   = flag.String("token", "", "API token (or env WEBDB_TOKEN; default: <data>/token)")
-		dataDir = flag.String("data", "./data", "data dir to read the token from")
-		timeout = flag.Duration("timeout", 30*time.Second, "request timeout")
-		exec    = flag.String("cmd", "", "run one command and exit (repeatable via shell)")
-		version = flag.Bool("version", false, "print version and exit")
+		addr    = fs.String("addr", "127.0.0.1:8080", "server address")
+		token   = fs.String("token", "", "API token (or env WEBDB_TOKEN; default: <data>/token)")
+		dataDir = fs.String("data", "./data", "data dir to read the token from")
+		timeout = fs.Duration("timeout", 30*time.Second, "request timeout")
+		exec    = fs.String("cmd", "", "run one command and exit")
+		version = fs.Bool("version", false, "print version and exit")
 	)
-	flag.Usage = func() {
-		fmt.Fprint(os.Stderr, `webdb-shell — консоль tinydb (в духе sqlite3)
+	fs.Usage = func() {
+		fmt.Fprint(os.Stderr, `webdb shell — консоль tinydb (в духе sqlite3)
 
 usage:
-  webdb-shell [flags]              интерактивный режим
-  webdb-shell -cmd ".tables"       одна команда и выход
-  echo "SELECT 1" | webdb-shell    чтение команд из stdin
+  webdb shell [flags]              интерактивный режим
+  webdb shell -cmd ".tables"       одна команда и выход
+  echo "SELECT 1" | webdb shell    чтение команд из stdin
 
 Флаги:
 `)
-		flag.PrintDefaults()
+		fs.PrintDefaults()
 		fmt.Fprint(os.Stderr, `
 Команды (точка — служебная, остальное — SQL к /v1/query):
   .help            эта справка        .quit / .exit   выход
@@ -61,11 +69,13 @@ usage:
   .token           какой токен используется (маскируется)
 `)
 	}
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 
 	if *version {
-		fmt.Println("webdb-shell 0.2.0 (tinydb)")
-		return
+		fmt.Println("webdb shell " + server.Version + " (tinydb)")
+		return 0
 	}
 
 	tok := *token
@@ -86,10 +96,10 @@ usage:
 
 	if *exec != "" {
 		if err := c.execLine(*exec); err != nil {
-			fmt.Fprintln(os.Stderr, "webdb-shell:", err)
-			os.Exit(1)
+			fmt.Fprintln(os.Stderr, "webdb shell:", err)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	fmt.Printf("tinydb %s — Ctrl-D или .quit для выхода\n", *addr)
@@ -101,7 +111,7 @@ usage:
 		fmt.Print(prompt)
 		if !in.Scan() {
 			fmt.Println()
-			return
+			return 0
 		}
 		line := in.Text()
 		// Многострочный ввод: незакрытая кавычка/скобка ждёт продолжения.
@@ -122,7 +132,7 @@ usage:
 		pending.Reset()
 		if err := safeExec(c, strings.TrimRight(joined, "\n")); err != nil {
 			if err == errExit {
-				return
+				return 0
 			}
 			fmt.Fprintln(os.Stderr, "error:", err)
 		}
@@ -401,7 +411,7 @@ func (c *client) dotCommand(line string) error {
 		}
 		return c.cmdDel(args[0], args[1])
 	case ".version":
-		fmt.Println("webdb-shell 0.2.0 (tinydb)")
+		fmt.Println("webdb shell " + server.Version + " (tinydb)")
 	default:
 		return fmt.Errorf("неизвестная команда %q (.help)", cmd)
 	}

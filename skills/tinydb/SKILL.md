@@ -1,13 +1,13 @@
 ---
 name: tinydb
-description: Как работать с tinydb — встраиваемой SQLite-базой с REST API и шифрованием at-rest. Используй, когда задача связана с tinydb: запуск сервера, консоль webdb-shell, REST-запросы, коллекции и документы, индексы, read-only SQL, экспорт/импорт, бэкап, авторизация (статический токен или JWT), тесты и сборка. Триггеры: «tinydb», «webdb», «webdb-shell», «tinydb REST», «tinydb консоль», «база с шифрованием tinydb».
+description: Как работать с tinydb — встраиваемой SQLite-базой с REST API и шифрованием at-rest. Используй, когда задача связана с tinydb: запуск сервера, консоль webdb shell, REST-запросы, коллекции и документы, индексы, read-only SQL, экспорт/импорт, бэкап, авторизация (статический токен или JWT), тесты и сборка. Триггеры: «tinydb», «webdb», «webdb shell», «tinydb REST», «tinydb консоль», «база с шифрованием tinydb».
 ---
 
 # tinydb для ИИ-агента
 
 tinydb — это сервер на Go поверх SQLite: наружу REST API, на диске только
 шифротекст (AES-256-GCM), процесс ест меньше 10 МБ RAM. Клиенты есть на Go, JS/TS
-и C, плюс консоль `webdb-shell` в духе sqlite3.
+и C, плюс консоль `webdb shell` в духе sqlite3.
 
 Ниже — только то, что нужно, чтобы начать работать. Подробности в
 `docs/API.md` (эндпоинты), `docs/SECURITY.md` (ключи и угрозы), `docs/DESIGN.md`
@@ -28,9 +28,10 @@ make run                   # запустить на 127.0.0.1:8099, данны�
 
 ## 2. Консоль — самый быстрый способ потрогать данные
 
+Консоль — подкоманда того же бинаря, ничего собирать не нужно:
+
 ```sh
-make shell                                        # собрать консоль
-./bin/webdb-shell -addr 127.0.0.1:8099 -data ./data
+./bin/webdb shell -addr 127.0.0.1:8099 -data ./data
 ```
 
 ```
@@ -47,7 +48,7 @@ tinydb> .quit
 
 Полезно: `.headers on|off`, `.mode column|list|json`, `.export`, `.flush`,
 `.get COLL ID`, `.rm COLL ID`. Незакрытая кавычка или скобка включает
-многострочный ввод. Однострочный запуск: `webdb-shell -cmd ".tables"`.
+многострочный ввод. Однострочный запуск: `webdb shell -cmd ".tables"`.
 
 ## 3. REST API — если нужен код
 

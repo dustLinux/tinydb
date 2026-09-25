@@ -41,15 +41,11 @@ build:
 	fi; \
 	echo "ok   bin/webdb = $$sz bytes (<= 10MiB)"
 
-# Консоль (в духе sqlite3). Живёт отдельно от сервера, чтобы не раздувать его.
-shell:
-	$(GO) build $(BUILDFLAGS) -o bin/webdb-shell.tmp ./cmd/webdb-shell
-	mv bin/webdb-shell.tmp bin/webdb-shell
-	@sz=$$(wc -c < bin/webdb-shell); \
-	if [ "$$sz" -gt $(BIN_MAX) ]; then \
-		echo "FAIL bin/webdb-shell = $$sz > $(BIN_MAX)"; exit 1; \
-	fi; \
-	echo "ok   bin/webdb-shell = $$sz bytes (<= 10MiB)"
+# Консоль живёт в том же бинаре (`webdb shell`), отдельной сборки нет: она
+# делит с сервером internal/httpx и добавляет меньше мегабайта к файлу.
+# Тесты консоли: сценарии в духе sqlite3 против живого сервера.
+shell-test:
+	bash tests/shell.sh
 
 # Тесты JWT: юнит-тесты пакета + e2e (выпуск токена → сервер принимает/отвергает).
 clients-jwt:
@@ -95,6 +91,11 @@ clients-js:
 # Консоль: сценарии в духе sqlite3 против живого сервера.
 shell-test: shell
 	bash tests/shell.sh
+
+# Тесты JWT: юнит-тесты пакета + e2e (выпуск токена → сервер принимает/отвергает).
+clients-jwt:
+	$(GO) test ./internal/auth/
+	bash tests/jwt.sh
 
 clients: clients-go clients-c clients-js clients-jwt shell-test
 

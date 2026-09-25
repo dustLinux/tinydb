@@ -25,10 +25,12 @@ import (
 )
 
 func main() {
-	// Подкоманда `webdb token` — выпуск JWT. Работает без запуска сервера и
-	// без каталога данных: нужен только секрет.
-	if len(os.Args) > 1 && os.Args[1] == "token" {
+	// Подкоманды живут в том же бинаре, что и сервер.
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "token":
 		os.Exit(runTokenCmd(os.Args[2:]))
+	case len(os.Args) > 1 && os.Args[1] == "shell":
+		os.Exit(runShell(os.Args[2:]))
 	}
 	// On GOOS=android the Go runtime defaults to MADV_FREE: freed pages stay
 	// accounted in RSS until the kernel reclaims them, which breaks the 10 MiB

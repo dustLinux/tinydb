@@ -48,11 +48,11 @@ bulk-загрузки, индексы, фильтры, read-only SQL, экспо
 
 ## Консоль
 
-Если хочется не писать curl, есть `webdb-shell` — консоль в духе sqlite3:
+Если хочется не писать curl, есть `webdb shell` — консоль в духе sqlite3,
+живущая внутри того же бинаря:
 
 ```sh
-make shell
-./bin/webdb-shell -addr 127.0.0.1:8099 -data ./data
+./bin/webdb shell -addr 127.0.0.1:8099 -data ./data
 ```
 
 ```
@@ -65,7 +65,7 @@ tinydb> .stats
 
 Понимает `.help`, `.tables`, `.schema`, `.ls`, `.get`, `.put`, `.rm`, `.index`,
 `.headers on|off`, `.mode column|list|json`, `.stats`, `.flush`, `.export` и
-read-only SQL. Одна команда вместо сессии: `webdb-shell -cmd ".tables"`.
+read-only SQL. Одна команда вместо сессии: `webdb shell -cmd ".tables"`.
 Подробности — [docs/SHELL.md](docs/SHELL.md).
 
 ## Клиенты
@@ -158,8 +158,8 @@ passphrase или внешний KMS.
 | Termux (Android) | `arm64`, `armv7` |
 | macOS | `arm64` (Apple Silicon), `amd64` (Intel) |
 
-Консоль `webdb-shell` собирается отдельно для linux/amd64, linux/arm64 и обеих
-macOS. В релиз также кладётся **скилл для ИИ-агентов**:
+Консоль — часть того же бинаря, так что она есть везде, где есть сервер.
+В релиз также кладётся **скилл для ИИ-агентов**:
 [`tinydb-agent-skill.tar.gz`](skills/tinydb/SKILL.md) — короткая инструкция
 (на русском) о том, как поднять сервер, пользоваться консолью и API.
 
