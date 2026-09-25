@@ -29,6 +29,19 @@ import (
 	"github.com/mattn/go-sqlite3"
 )
 
+// Коды операций authorizer'а (sqlite3.h; значения стабильны). Объявлены здесь,
+// а не берутся из пакета mattn: при CGO_ENABLED=0 вместо драйвера подставляется
+// стаб, в котором этих констант нет, и сборка падала бы.
+const (
+	sqliteOpPragma   = 19
+	sqliteOpRead     = 20
+	sqliteOpSelect   = 21
+	sqliteOpFunction = 31
+
+	sqliteOK   = 0
+	sqliteDeny = 1
+)
+
 // Функции, которые читают/пишут файлы, грузят расширения или позволяют
 // выделить огромный BLOB в память. Остальные (count/sum/json_*/date/…) доступны.
 var sqlDeniedFuncs = map[string]bool{
@@ -45,25 +58,25 @@ var sqlDeniedFuncs = map[string]bool{
 // скалярные функции (кроме опасного списка).
 func readOnlyAuthorizer(op int, a1, a2, a3 string) int {
 	switch op {
-	case sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ:
-		return sqlite3.SQLITE_OK
-	case sqlite3.SQLITE_PRAGMA:
+	case sqliteOpSelect, sqliteOpRead:
+		return sqliteOK
+	case sqliteOpPragma:
 		// query_only разрешён: им включается и проверяется read-only-режим
 		// соединения (выполняется под тем же authorizer'ом). Остальные PRAGMA
 		// (journal_mode, foreign_keys, mmap_size, …) запрещены.
 		if strings.EqualFold(a1, "query_only") {
-			return sqlite3.SQLITE_OK
+			return sqliteOK
 		}
-		return sqlite3.SQLITE_DENY
-	case sqlite3.SQLITE_FUNCTION:
+		return sqliteDeny
+	case sqliteOpFunction:
 		if sqlDeniedFuncs[strings.ToLower(a2)] {
-			return sqlite3.SQLITE_DENY
+			return sqliteDeny
 		}
-		return sqlite3.SQLITE_OK
+		return sqliteOK
 	default:
-		// INSERT/UPDATE/DELETE/CREATE/DROP/ALTER/ATTACH/DETACH/PRAGMA/
-		// TRANSACTION/SAVEPOINT/ANALYZE/REINDEX/COPY и всё прочее — запрещено.
-		return sqlite3.SQLITE_DENY
+		// INSERT/UPDATE/DELETE/CREATE/DROP/ALTER/ATTACH/DETACH/TRANSACTION/
+		// SAVEPOINT/ANALYZE/REINDEX/COPY и всё прочее — запрещено.
+		return sqliteDeny
 	}
 }
 
