@@ -153,3 +153,27 @@
       `$GOFLAGS` оттуда без кавычек → CI падал).
 - [x] README переоформлен: бейджи (CI/pkg.go.dev/license), установка
       `go get`, матрица архитектур, секция «Тесты», структура с `.github`.
+
+## Этап 8. Ветка v0.2: JWT, консоль, agent skill
+
+- [x] **JWT (HS256, только stdlib)** — `internal/auth`: проверка подписи
+      constant-time, `exp`/`nbf`/`iat` с leeway, опциональные `iss`/`aud`,
+      `scp`. Алгоритм из конфига сервера, не из заголовка токена — `alg: none`
+      и подмена RS/HS отвергаются. Сервер принимает статический токен ИЛИ JWT.
+- [x] Утилита выпуска: `webdb token -sub -ttl -iss -aud -scp -nbf`
+      (секрет из `WEBDB_JWT_SECRET`, чтобы не светился в истории команд).
+- [x] **Консоль `webdb-shell`** (в духе sqlite3): `.tables .schema .ls .get
+      .put .rm .index .headers .mode .stats .flush .export .token` + read-only
+      SQL, многострочный ввод, режимы column/list/json, bin-пайплайн.
+- [x] **Минимальный HTTP-клиент** `internal/httpx/client.go` — консоль 3.5 МБ
+      вместо 6.7 МБ с `net/http`. Приоритет: клиент минимальный, размер
+      бинаря сервера вторичен, критична RAM.
+- [x] Убран `-gcflags=all=-B` из сборок: оптимизация размера сервера, попутно
+      отключавшая проверки границ в парсере HTTP.
+- [x] **Agent skill** `skills/tinydb/SKILL.md` (+ валидация в CI, тарбол
+      `tinydb-agent-skill.tar.gz` в релизе) — инструкция для ИИ-агентов.
+- [x] **Двуязычный README**: `README.md` (RU) и `README.en.md` (EN) с
+      переключателем вверху; доки очеловечены, добавлен `docs/SHELL.md`.
+- [x] Тесты: `tests/jwt.sh` (22), `tests/shell.sh` (29), `internal/auth`
+      (12 юнит-тестов). Итого make check: smoke 44 + security 69 + jwt 22 +
+      shell 29 + client-go/JS/C.

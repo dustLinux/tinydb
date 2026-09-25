@@ -39,7 +39,7 @@ jobs:
         run: make check
 
       - name: portable-сборка (bundled SQLite — как в релизах)
-        run: make build BUILDFLAGS='-gcflags=all=-B -ldflags "-s -w"'
+        run: make build BUILDFLAGS='-ldflags "-s -w"'
 
       - name: smoke + security на portable-сборке
         run: |
@@ -109,7 +109,7 @@ jobs:
           zig version | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Сборка
-        run: go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb
+        run: go build -trimpath -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb
 
       - name: Отчёт
         run: file "bin/${{ matrix.artifact }}" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -152,7 +152,7 @@ jobs:
         run: |
           export CC="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.ccbin }}"
           "$CC" --version
-          go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb
+          go build -trimpath -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb
           file "bin/${{ matrix.artifact }}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
@@ -174,7 +174,7 @@ jobs:
           go-version: '1.27.x'
 
       - name: Сборка darwin/arm64 (родная)
-        run: go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o bin/webdb-darwin-arm64 ./cmd/webdb
+        run: go build -trimpath -ldflags "-s -w" -o bin/webdb-darwin-arm64 ./cmd/webdb
 
       - name: Сборка darwin/amd64 (clang -arch x86_64)
         env:
@@ -182,7 +182,7 @@ jobs:
           GOOS: darwin
           GOARCH: amd64
           CC: clang -arch x86_64
-        run: go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o bin/webdb-darwin-amd64 ./cmd/webdb
+        run: go build -trimpath -ldflags "-s -w" -o bin/webdb-darwin-amd64 ./cmd/webdb
 
       - name: Запуск arm64-бинарника (health, stats, шифрование на выходе)
         run: |
@@ -209,11 +209,67 @@ jobs:
           path: bin/webdb-darwin-*
           retention-days: 14
 
+  # ------------------------------------------------------- консоль webdb-shell
+  shell:
+    name: shell (webdb-shell)
+    if: github.event_name != 'pull_request'
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {artifact: webdb-shell-linux-amd64, goos: linux, goarch: amd64}
+          - {artifact: webdb-shell-linux-arm64, goos: linux, goarch: arm64}
+          - {artifact: webdb-shell-darwin-arm64, goos: darwin, goarch: arm64}
+          - {artifact: webdb-shell-darwin-amd64, goos: darwin, goarch: amd64}
+    runs-on: ${{ matrix.goos == 'darwin' && 'macos-latest' || 'ubuntu-latest' }}
+    env:
+      CGO_ENABLED: '0'          # консоль — чистый Go, cgo не нужен
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+      - name: Сборка консоли
+        run: go build -trimpath -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb-shell
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bin/${{ matrix.artifact }}
+          retention-days: 14
+
+  # --------------------------------------------------- скилл для ИИ-агентов
+  agent-skill:
+    name: agent skill (SKILL.md)
+    # Валидация скилла идёт на каждом PR (это 5 секунд), упаковка — только
+    # для релизов: на PR артефакт всё равно не попадёт в релиз.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Проверка скилла
+        run: |
+          test -f skills/tinydb/SKILL.md
+          head -1 skills/tinydb/SKILL.md | grep -q '^---$'   # YAML-фронтматтер
+          grep -q '^name: ' skills/tinydb/SKILL.md
+          grep -q '^description: ' skills/tinydb/SKILL.md
+          echo "skill ok: $(wc -l < skills/tinydb/SKILL.md) строк"
+      - name: Упаковка
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: tar -czf tinydb-agent-skill.tar.gz -C skills tinydb
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: tinydb-agent-skill
+          path: tinydb-agent-skill.tar.gz
+          retention-days: 14
+
   # ------------------------------------------------------------ релиз v*
   release:
     name: release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, android, macos]
+    needs: [build, android, macos, shell, agent-skill]
     runs-on: ubuntu-latest
     permissions:
       contents: write
