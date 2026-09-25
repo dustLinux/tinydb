@@ -8,6 +8,7 @@
 #   F. целостность после SIGTERM: нет plaintext, есть WEBDBENC-snapshot
 #   G. отрицательные старты: битый ключ, чужой ключ, подделанный .enc
 #   H. режим passphrase: нет db.key, верный пароль — старт, неверный — отказ
+#   I. регрессия аудита: DML-CTE в read-only SQL, index poison, trailing JSON
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -123,6 +124,61 @@ chk key-len32 '32' "$(wc -c < "$DDIR/db.key" | tr -d ' ')"
 chk_not log-no-token "$TOKEN" "$(cat "$SLOG")"
 chk_not cors-off 'Access-Control-Allow-Origin' "$(curl -s -D - -o /dev/null $BASE/health)"
 chk log-auth-enabled 'auth=true' "$(cat "$SLOG")"
+
+# ---- I. Регрессия аудита безопасности (находки активного тестирования) ----
+echo "== I. Регрессия аудита"
+
+# I1. «Read-only» SQL не должен писать: DML-CTE (WITH ... DELETE/UPDATE/INSERT)
+# проходил лексический фильтр (префикс WITH) и удалял данные.
+j -X POST -H "Authorization: Bearer $TOKEN" -d '{"name":"audit"}' "$BASE/v1/collections" >/dev/null
+j -X PUT -H "Authorization: Bearer $TOKEN" -d '{"n":1}' "$BASE/v1/collections/audit/docs/a1" >/dev/null
+j -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/flush" >/dev/null
+before=$(j -H "Authorization: Bearer $TOKEN" -X POST -d '{"sql":"SELECT COUNT(*) AS c FROM docs"}' "$BASE/v1/query")
+for dml in \
+  'WITH x AS (SELECT 1) DELETE FROM docs' \
+  'WITH x AS (SELECT 1) UPDATE docs SET data = "{}"' \
+  'WITH x AS (SELECT 1) INSERT INTO docs(collection,id,data,created,updated) VALUES("audit","x","{}",1,1)' \
+  'WITH x AS (SELECT 1) DROP TABLE docs' \
+  'DELETE FROM docs' \
+  'UPDATE docs SET data="{}"' \
+  'INSERT INTO docs(collection,id,data,created,updated) VALUES("audit","y","{}",1,1)' \
+  'DROP TABLE docs' \
+  'ATTACH DATABASE "/tmp/audit-evil.db" AS evil' \
+  'PRAGMA writable_schema=ON' \
+  'SELECT load_extension("/tmp/x.so")' \
+  'SELECT zeroblob(100000000)' ; do
+  out=$(j -H "Authorization: Bearer $TOKEN" -X POST --data-binary "$(printf '{"sql":%s}' "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$dml")")" "$BASE/v1/query")
+  chk_not "dml-blocked: ${dml:0:34}" '"status":200' "$out"
+done
+after=$(j -H "Authorization: Bearer $TOKEN" -X POST -d '{"sql":"SELECT COUNT(*) AS c FROM docs"}' "$BASE/v1/query")
+chk dml-no-data-loss "$before" "$after"
+chk dml-select-still-works 'columns' "$(j -H "Authorization: Bearer $TOKEN" -X POST -d '{"sql":"SELECT 1 AS one"}' "$BASE/v1/query")"
+
+# I2. Index poison: коллекция с '-' → CREATE INDEX без кавычек был syntax error,
+# из-за чего буфер write-back залипал навсегда (все read-barrier → 500).
+j -X POST -H "Authorization: Bearer $TOKEN" -d '{"name":"a-b"}' "$BASE/v1/collections" >/dev/null
+j -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/collections/a-b/indexes?field=x" >/dev/null
+j -X POST -H "Authorization: Bearer $TOKEN" -d '{"k":1}' "$BASE/v1/import?mode=merge" >/dev/null
+j -X PUT -H "Authorization: Bearer $TOKEN" -d '{"k":1}' "$BASE/v1/collections/a-b/docs/k1?upsert=true" >/dev/null
+j -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/flush" >/dev/null
+chk idx-poison-read-ok '"a-b"' "$(j -H "Authorization: Bearer $TOKEN" "$BASE/v1/collections")"
+chk idx-poison-list-ok 'items' "$(j -H "Authorization: Bearer $TOKEN" "$BASE/v1/collections/a-b/docs")"
+buf=$(j -H "Authorization: Bearer $TOKEN" "$BASE/v1/stats" | grep -o '"buffer_items":[0-9]*')
+chk idx-poison-buffer-drained '"buffer_items":0' "$buf"
+# индекс реально создан (а не «201 indexed:true» враньё), коллекция рабочая
+j -X PUT -H "Authorization: Bearer $TOKEN" -d '{"k":2}' "$BASE/v1/collections/a-b/docs/k2?upsert=true" >/dev/null
+j -X POST -H "Authorization: Bearer $TOKEN" "$BASE/v1/flush" >/dev/null
+chk idx-poison-usable 'k2' "$(j -H "Authorization: Bearer $TOKEN" "$BASE/v1/collections/a-b/docs")"
+chk idx-poison-index-listed 'ix_a-b_x' "$(j -H "Authorization: Bearer $TOKEN" "$BASE/v1/collections/a-b/indexes")"
+
+# I3. Import: мусор после корректного объекта обязан отклоняться (иначе хвост
+# тела остаётся непрочитанным и обходит -max-import).
+good='{"schema_version":"1","collections":[],"docs":[]}'
+chk import-trailing-garbage 'status' "$(j -H "Authorization: Bearer $TOKEN" -X POST --data-binary "$good GARBAGE" "$BASE/v1/import")"
+chk_not import-trailing-ok '"status":200' "$(j -H "Authorization: Bearer $TOKEN" -X POST --data-binary "$good GARBAGE" "$BASE/v1/import")"
+chk_not import-second-object-ok '"status":200' "$(j -H "Authorization: Bearer $TOKEN" -X POST --data-binary "$good$good" "$BASE/v1/import")"
+chk import-clean-ok '"docs":0' "$(j -H "Authorization: Bearer $TOKEN" -X POST --data-binary "$good" "$BASE/v1/import?mode=merge")"
+chk server-alive-after-audit 'ok' "$(j "$BASE/health")"
 
 echo "== F. SIGTERM: plaintext убран, снапшот WEBDBENC цел"
 kill -TERM "$SRVPID"; wait "$SRVPID" 2>/dev/null; SRVPID=""

@@ -19,6 +19,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -68,7 +69,14 @@ func (s *Store) enqueue(op *pendingOp) {
 }
 
 // applyLocked applies every buffered op to SQLite in one transaction.
-// s.mu must be held. On error the buffer is kept for a later retry.
+// s.mu must be held.
+//
+// Устойчивость к битым операциям: если конкретный op падает, он отбрасывается
+// с записью в лог, а остальные применяются. Раньше любая ошибка оставляла весь
+// буфер «залипшим» навсегда: каждый следующий apply откатывался, read-barrier-ы
+// отдавали 500, новые мутации копились в памяти, а Close() не мог сохранить
+// снапшот (данные терялись). Возвращаемая ошибка — первая из отброшенных, так
+// что клиент узнаёт о проблеме, но сервер остаётся рабочим.
 func (s *Store) applyLocked() error {
 	if len(s.pend) == 0 {
 		return nil
@@ -78,40 +86,16 @@ func (s *Store) applyLocked() error {
 		return mapErr(err)
 	}
 	defer tx.Rollback()
+	var firstErr error
 	for _, op := range s.pend {
-		switch op.kind {
-		case opPutDoc:
-			if err := ensureCollection(tx, op.coll); err != nil {
-				return err
+		// SQLite не откатывает транзакцию после ошибки отдельного statement,
+		// поэтому битый op можно пропустить и продолжить.
+		if err := applyOp(tx, op); err != nil {
+			if firstErr == nil {
+				firstErr = err
 			}
-			_, err := tx.Exec(`INSERT INTO docs(collection,id,data,created,updated) VALUES(?,?,?,?,?)
-				ON CONFLICT(collection,id) DO UPDATE SET data=excluded.data, updated=excluded.updated`,
-				op.coll, op.id, op.data, op.created, op.updated)
-			if err != nil {
-				return mapErr(err)
-			}
-		case opDelDoc:
-			if _, err := tx.Exec(`DELETE FROM docs WHERE collection=? AND id=?`,
-				op.coll, op.id); err != nil {
-				return mapErr(err)
-			}
-		case opCreateColl:
-			_, err := tx.Exec(`INSERT OR IGNORE INTO _collections(name,created) VALUES(?,?)`,
-				op.coll, op.created)
-			if err != nil {
-				return mapErr(err)
-			}
-		case opCreateIdx:
-			stmt := fmt.Sprintf(
-				`CREATE INDEX IF NOT EXISTS %s ON docs(collection, json_extract(data, '$.%s'))`,
-				indexName(op.coll, op.id), op.id)
-			if _, err := tx.Exec(stmt); err != nil {
-				return mapErr(err)
-			}
-		case opDropIdx:
-			if _, err := tx.Exec(`DROP INDEX IF EXISTS ` + indexName(op.coll, op.id)); err != nil {
-				return mapErr(err)
-			}
+			s.log.Warn("write-back op failed, dropped", "kind", op.kind, "coll", op.coll, "id", op.id, "err", err)
+			continue
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -123,6 +107,50 @@ func (s *Store) applyLocked() error {
 	s.pendN.Store(0)
 	s.applies.Add(1)
 	s.dirty.Store(true)
+	return firstErr
+}
+
+// applyOp применяет одну операцию буфера внутри транзакции tx.
+func applyOp(tx *sql.Tx, op *pendingOp) error {
+	switch op.kind {
+	case opPutDoc:
+		if err := ensureCollection(tx, op.coll); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO docs(collection,id,data,created,updated) VALUES(?,?,?,?,?)
+			ON CONFLICT(collection,id) DO UPDATE SET data=excluded.data, updated=excluded.updated`,
+			op.coll, op.id, op.data, op.created, op.updated)
+		if err != nil {
+			return mapErr(err)
+		}
+	case opDelDoc:
+		if _, err := tx.Exec(`DELETE FROM docs WHERE collection=? AND id=?`,
+			op.coll, op.id); err != nil {
+			return mapErr(err)
+		}
+	case opCreateColl:
+		_, err := tx.Exec(`INSERT OR IGNORE INTO _collections(name,created) VALUES(?,?)`,
+			op.coll, op.created)
+		if err != nil {
+			return mapErr(err)
+		}
+	case opCreateIdx:
+		// Идентификатор в кавычках: имя коллекции может содержать '-'
+		// (collNamePat), а без кавычек «ix_a-b_x» — синтаксическая ошибка,
+		// из-за которой операция навсегда застревала в буфере и ломала все
+		// последующие flush. JSON-путь безопасен: fieldNamePat не допускает
+		// ни кавычек, ни точек.
+		stmt := fmt.Sprintf(
+			`CREATE INDEX IF NOT EXISTS %s ON docs(collection, json_extract(data, '$.%s'))`,
+			quoteIdent(indexName(op.coll, op.id)), op.id)
+		if _, err := tx.Exec(stmt); err != nil {
+			return mapErr(err)
+		}
+	case opDropIdx:
+		if _, err := tx.Exec(`DROP INDEX IF EXISTS ` + quoteIdent(indexName(op.coll, op.id))); err != nil {
+			return mapErr(err)
+		}
+	}
 	return nil
 }
 

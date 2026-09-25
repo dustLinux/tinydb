@@ -51,7 +51,7 @@ func main() {
 	}
 
 	var (
-		addr       = flag.String("addr", ":8080", "listen address")
+		addr       = flag.String("addr", "127.0.0.1:8080", "listen address (loopback by default; pass :PORT or 0.0.0.0:PORT to expose)")
 		dataDir    = flag.String("data", "./data", "data directory (db.sqlite, db.sqlite.enc, db.key)")
 		maxSizeMiB = flag.Int64("max-size", 100, "storage quota in MiB (disk)")
 		cacheKiB   = flag.Int("cache-kb", 64, "SQLite page cache in KiB per connection (RAM budget)")

@@ -12,6 +12,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -262,7 +263,7 @@ func Open(cfg Config) (*Store, error) {
 	// Two pooled connections with a small per-connection page cache: SQLite's
 	// cache_size is per connection, so 4 conns × 256 KiB would be a 1 MiB
 	// anon-RSS resident budget by itself.
-	db.SetMaxOpenConns(2)
+	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	s.db = db
 
@@ -596,6 +597,13 @@ func mapErr(err error) error {
 		strings.Contains(msg, "disk I/O error"),
 		strings.Contains(msg, "SQLITE_FULL"):
 		return fmt.Errorf("%w: %v", ErrQuota, err)
+	case strings.Contains(msg, "not authorized"),
+		strings.Contains(msg, "SQLITE_AUTH"),
+		strings.Contains(msg, "query_only"),
+		strings.Contains(msg, "attempt to write a readonly database"):
+		// Отказ авторизатора SQLite / PRAGMA query_only — это ошибка запроса
+		// клиента (попытка записи через read-only SQL), а не сбой сервера.
+		return fmt.Errorf("%w: операция запрещена в read-only режиме (%v)", ErrReadOnlySQL, err)
 	}
 	return err
 }
@@ -671,7 +679,7 @@ func (s *Store) DropCollection(name string) error {
 		return err
 	}
 	for _, in := range idx {
-		if _, err := tx.Exec(`DROP INDEX IF EXISTS ` + in); err != nil {
+		if _, err := tx.Exec(`DROP INDEX IF EXISTS ` + quoteIdent(in)); err != nil {
 			return mapErr(err)
 		}
 	}
@@ -1020,6 +1028,15 @@ func indexName(collection, field string) string {
 	return fmt.Sprintf("ix_%s_%s", collection, field)
 }
 
+// quoteIdent оборачивает идентификатор SQLite в двойные кавычки. Все
+// динамические идентификаторы (имя индекса, таблицы) проходят через неё:
+// вставлять их в SQL «как есть» нельзя — «-» в имени коллекции даёт
+// синтаксическую ошибку, а «"» потенциально ломает разбор. Валидация имён
+// не пропускает кавычки, поэтому экранирование «»» достаточно.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
 // CreateIndex queues creation of an expression index on a top-level field
 // (applied lazily with the rest of the buffer).
 func (s *Store) CreateIndex(collection, field string) error {
@@ -1131,47 +1148,58 @@ func (s *Store) SQL(query string, args []any) ([]string, [][]json.RawMessage, bo
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows, err := s.db.Query(q, args...)
-	if err != nil {
-		return nil, nil, false, mapErr(err)
-	}
-	defer rows.Close()
-	cols, err := rows.Columns()
+	// Запрос исполняется на защищённом соединении: authorizer + query_only=1
+	// (см. sqlro.go). Лексическая проверка выше — только UX-фильтр.
+	var (
+		cols      []string
+		out       [][]json.RawMessage
+		truncated bool
+	)
+	err := s.withReadOnly(context.Background(), func(conn *sql.Conn) error {
+		rows, err := conn.QueryContext(context.Background(), q, args...)
+		if err != nil {
+			return mapErr(err)
+		}
+		defer rows.Close()
+		cols, err = rows.Columns()
+		if err != nil {
+			return err
+		}
+		const maxRows = 1000
+		const maxBytes = 2 << 20
+		var total int64
+		for rows.Next() && len(out) < maxRows {
+			vals := make([]any, len(cols))
+			ptrs := make([]any, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				return err
+			}
+			rec := make([]json.RawMessage, len(cols))
+			rowBytes := int64(0)
+			for i, v := range vals {
+				rec[i] = scanToJSON(v)
+				rowBytes += int64(len(rec[i]))
+			}
+			total += rowBytes
+			if total > maxBytes {
+				truncated = true
+				break
+			}
+			out = append(out, rec)
+		}
+		if rows.Next() {
+			truncated = true
+		}
+		if err := rows.Err(); err != nil {
+			return mapErr(err)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, nil, false, err
-	}
-	var out [][]json.RawMessage
-	const maxRows = 1000
-	const maxBytes = 2 << 20
-	var total int64
-	truncated := false
-	for rows.Next() && len(out) < maxRows {
-		vals := make([]any, len(cols))
-		ptrs := make([]any, len(cols))
-		for i := range vals {
-			ptrs[i] = &vals[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, nil, false, err
-		}
-		rec := make([]json.RawMessage, len(cols))
-		rowBytes := int64(0)
-		for i, v := range vals {
-			rec[i] = scanToJSON(v)
-			rowBytes += int64(len(rec[i]))
-		}
-		total += rowBytes
-		if total > maxBytes {
-			truncated = true
-			break
-		}
-		out = append(out, rec)
-	}
-	if rows.Next() {
-		truncated = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, false, mapErr(err)
 	}
 	return cols, out, truncated, nil
 }
@@ -1429,6 +1457,16 @@ func (s *Store) Import(r io.Reader, mode string) (ImportResult, error) {
 	}
 	if _, err := dec.Token(); err != nil { // '}'
 		return res, err
+	}
+	// После закрывающей скобки должен быть ровно EOF. Раньше проверки не было:
+	// мусор после объекта («} GARBAGE») или второй JSON-документ принимались,
+	// а в chunked-варианте хвост тела оставался непрочитанным — это позволяло
+	// обойти заявленный -max-import и залипнуть на непрочитанных байтах.
+	if _, err := dec.Token(); err != io.EOF {
+		if err == nil {
+			return res, fmt.Errorf("%w: trailing data after JSON document", ErrInvalid)
+		}
+		return res, fmt.Errorf("%w: trailing data after JSON document: %v", ErrInvalid, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return res, mapErr(err)
