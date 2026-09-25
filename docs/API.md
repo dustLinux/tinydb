@@ -1,6 +1,6 @@
 # tinydb REST API v1
 
-Базовый URL: `http://127.0.0.1:8080` (по умолчанию `:8080`).
+Базовый URL: `http://127.0.0.1:8080` (по умолчанию `127.0.0.1:8080`, только loopback).
 
 ## Аутентификация
 
@@ -195,6 +195,13 @@ curl -s -H "Authorization: Bearer $TOKEN" -X POST \
 Только `SELECT`/`WITH` на чтение. Попытка записи (`INSERT`,
 `UPDATE`, `DELETE`, `DROP`…) → `400`. Стек из более одного запроса
 в `sql` → `400`. `args` — массив скаляров (`?`-плейсхолдеры).
+
+Ограничение не лексическое: даже если запрос начинается с допустимого
+`WITH`, он исполняется под двумя уровнями защиты SQLite —
+`PRAGMA query_only=1` и authorizer, запрещающий все операции, кроме
+чтения (включая `PRAGMA`, `ATTACH`, `load_extension`, `readfile`,
+`zeroblob`). Поэтому `WITH x AS (SELECT 1) DELETE FROM docs` → `400`,
+а не тихая запись.
 `collection`/`docs` — таблицы: `docs(collection TEXT, id TEXT,
 data TEXT, ...)`, `_collections(name TEXT, ...)`.
 
