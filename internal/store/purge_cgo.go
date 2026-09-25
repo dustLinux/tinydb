@@ -5,14 +5,23 @@ package store
 /*
 #include <stdlib.h>
 
-#if defined(__ANDROID__) || defined(__linux__)
-#include <malloc.h>
-#ifdef __ANDROID__
-// bionic hides the declaration behind __BIONIC_AVAILABILITY_GUARD(26),
-// which cgo's preprocessor run does not satisfy; the symbol itself is in
-// libc since API 26 and M_PURGE_ALL is an unconditional macro there.
-extern int mallopt(int __option, int __value);
+#if defined(__ANDROID__)
+// bionic отдаёт mallopt только с API 26, а NDK-сисроут для более старых
+// API вообще не содержит этого символа (ошибка линковки в CI). Поэтому:
+// без malloc.h (там декларация за __BIONIC_AVAILABILITY_GUARD), слабая
+// ссылка + проверка на NULL: на старых устройствах шаг просто пропускается.
+// Значение M_PURGE_ALL совпадает с bionic'овским (джеймэллок, Android).
+#ifndef M_PURGE_ALL
+#define M_PURGE_ALL (-100)
 #endif
+int (*webdb_mallopt)(int, int) __attribute__((weak));
+static inline void webdb_purge(void) {
+	if (webdb_mallopt) {
+		webdb_mallopt(M_PURGE_ALL, 0);
+	}
+}
+#elif defined(__linux__)
+#include <malloc.h>
 #ifndef M_PURGE_ALL
 // M_PURGE_ALL (-100) is bionic-specific; glibc treats unknown mallopt
 // options as a no-op, so the call is harmless outside Android too.

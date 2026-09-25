@@ -60,15 +60,18 @@ jobs:
           - {artifact: webdb-linux-armv7,   goarch: arm,     goarm: '7', cc: arm-linux-gnueabihf-gcc, apt: gcc-arm-linux-gnueabihf}
           - {artifact: webdb-linux-riscv64, goarch: riscv64, cc: riscv64-linux-gnu-gcc,    apt: gcc-riscv64-linux-gnu}
           - {artifact: webdb-linux-ppc64le, goarch: ppc64le, cc: powerpc64le-linux-gnu-gcc, apt: gcc-powerpc64le-linux-gnu}
-          - {artifact: webdb-linux-ppc64,   goarch: ppc64,   cc: powerpc64-linux-gnu-gcc,  apt: gcc-powerpc64-linux-gnu}
+          - {artifact: webdb-linux-ppc64,   goarch: ppc64,   cc: powerpc64-linux-gnu-gcc -mabi=elfv2, apt: gcc-powerpc64-linux-gnu}
           - {artifact: webdb-linux-s390x,   goarch: s390x,   cc: s390x-linux-gnu-gcc,      apt: gcc-s390x-linux-gnu}
-          # loong64: кросс-gcc есть не во всех релизах Ubuntu — экспериментальный.
-          - {artifact: webdb-linux-loong64, goarch: loong64, cc: loongarch64-linux-gnu-gcc, apt: gcc-loongarch64-linux-gnu, experimental: true}
-          # Для mips32 мягкий ABI совпадает с Debian/Ubuntu-тулчейном.
+          # loong64: в репозиториях Ubuntu кросс-gcc нет (только в Debian
+          # trixie+), поэтому C-компилятор — zig cc, адаптер кросс-тулчейна.
+          - {artifact: webdb-linux-loong64, goarch: loong64, cc: zig cc -target loongarch64-linux-gnu, zig: true, experimental: true}
+          # mips32: Debian/Ubuntu-тулчейн o32 — только hard-float ABI
+          # (в sysroot есть stubs-o32_hard.h, но нет stubs-o32_soft.h),
+          # поэтому GOMIPS=hardfloat, иначе несовместимый stubs.h.
           - {artifact: webdb-linux-mips64le, goarch: mips64le, cc: mips64el-linux-gnuabi64-gcc, apt: gcc-mips64el-linux-gnuabi64}
           - {artifact: webdb-linux-mips64,   goarch: mips64,   cc: mips64-linux-gnuabi64-gcc,   apt: gcc-mips64-linux-gnuabi64}
-          - {artifact: webdb-linux-mipsle,   goarch: mipsle,   cc: mipsel-linux-gnu-gcc,      apt: gcc-mipsel-linux-gnu, gomips: softfloat}
-          - {artifact: webdb-linux-mips,     goarch: mips,     cc: mips-linux-gnu-gcc,          apt: gcc-mips-linux-gnu,      gomips: softfloat}
+          - {artifact: webdb-linux-mipsle,   goarch: mipsle,   cc: mipsel-linux-gnu-gcc,      apt: gcc-mipsel-linux-gnu, gomips: hardfloat}
+          - {artifact: webdb-linux-mips,     goarch: mips,     cc: mips-linux-gnu-gcc,        apt: gcc-mips-linux-gnu,   gomips: hardfloat}
     env:
       CGO_ENABLED: '1'
       GOOS: linux
@@ -82,9 +85,20 @@ jobs:
         with:
           go-version: '1.27.x'
 
-      - name: Кросс-тулчейн
+      - name: Кросс-тулчейн (apt)
         if: matrix.apt
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Кросс-тулчейн (zig для loong64)
+        if: matrix.zig
+        run: |
+          ZIG_VER=0.14.1
+          curl -fsSL -o zig.tar.xz "https://ziglang.org/download/${ZIG_VER}/zig-linux-x86_64-${ZIG_VER}.tar.xz"
+          echo "${ZIG_VER} SHA256:" | tee -a "$GITHUB_STEP_SUMMARY"
+          sha256sum zig.tar.xz | tee -a "$GITHUB_STEP_SUMMARY"
+          sudo tar -C /opt -xJf zig.tar.xz
+          echo "/opt/zig-linux-x86_64-${ZIG_VER}" >> "$GITHUB_PATH"
+          zig version
 
       - name: Сборка
         run: go build -trimpath -gcflags=all=-B -ldflags "-s -w" -o "bin/${{ matrix.artifact }}" ./cmd/webdb
