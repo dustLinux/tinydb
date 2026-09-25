@@ -12,6 +12,8 @@
 - [x] Auth (Bearer / X-API-Key), автотокен `<data>/token`
 - [x] Квота диска 100 МБ (max_page_count), RAM-лимиты (cache 64КБ, GOMEMLIMIT)
 - [x] Смоук-тест: **44/44, fail=0** (включая write-back и RSS-метрику)
+- [x] Тесты безопасности: **45/45, fail=0** (tests/security.sh)
+- [x] CI на GitHub Actions: тесты + сборки всех архитектур + releases
 
 ## Этап 1. Багфиксы (P0/P1)
 
@@ -103,3 +105,39 @@
 - [x] **Финальный `make check`: ok** — bin/webdb 4046256 байт (≤10МБ),
       smoke 44/44 (RSS=10116 ≤10240), client-go ok, C-либы 24696/26072
       (≤512КиБ), C-example PASS (idx-create/list/drop, идемпотентен).
+
+## Этап 7. Публикация: GitHub, CI/CD, тесты безопасности
+
+- [x] Module path → `github.com/dustlinux/tinydb` (+ `/client-go`);
+      репо **dustlinux/tinydb** (public, BSD-3-Clause LICENSE — пользователя),
+      git-история: стартовый коммит пользователя + основной коммит проекта.
+- [x] `go get github.com/dustlinux/tinydb/client-go` работает через прокси
+      (псевдоверсия `v0.0.0-20260925043623-1451052c3051`).
+- [x] **Тесты безопасности `tests/security.sh` — 45/45**: auth
+      (401/неверный токен/X-API-Key/health открыт), SQL только чтение
+      (INSERT/стек/PRAGMA/ATTACH → 400, вредный аргумент — параметр, таблица
+      жива), валидации имён (плохие/`_`-резерв/65 символов) и path
+      traversal, лимиты тел (`413`: обычный эндпоинт и `-max-import`), права
+      0700/0600, токена нет в логе, CORS off, SIGTERM → нет plaintext +
+      `WEBDBENC`, негативные старты (ключ 10 байт / чужой ключ / подделанный
+      .enc / неверный passphrase → отказ), passphrase-режим (без db.key).
+- [x] Найдено и исправлено этим же этапом:
+  - токен писался в лог (`use token`) — утечка, удалено;
+  - `/v1/import` читал тело в обход `-max-body` — добавлен `-max-import`
+    (64 МиБ, стрим с лимитом, `413` c rollback транзакции);
+  - резервные имена коллекций не проверялись — запрет префикса `_`;
+  - свежий `db.sqlite` создавался 0644 — принудительный chmod 0600.
+- [x] CI `.github/workflows/ci.yml`:
+  - `test` (ubuntu): `make check` на dev-пути (libsqlite3) + portable-сборка
+    (bundled SQLite) + smoke/security; RSS_MAX_KB=14336 для x86-64;
+  - `build`: 13 linux-архитектур кросс-gcc (amd64, 386, arm64, armv7,
+    riscv64, ppc64le, ppc64, s390x, loong64*, mips64le, mips64, mipsle, mips);
+  - `android`: arm64 + armv7 через NDK clang (то, что нужно Termux);
+  - `macos`: darwin/arm64 + darwin/amd64, запуск бинарника (health/stats/
+    шифрование на выходе);
+  - `release` по тегу `v*`: тарболы всех сборок + SHA256SUMS.
+- [x] Портируемость, найденная CI/кросс-проверкой и исправленная:
+  `C.M_PURGE_ALL` (константа bionic — на glibc/macOS сборка падала;
+  теперь no-op/фолбэк), `syscall.SOCK_NONBLOCK` (linux-only → SetNonblock).
+- [x] README переоформлен: бейджи (CI/pkg.go.dev/license), установка
+      `go get`, матрица архитектур, секция «Тесты», структура с `.github`.

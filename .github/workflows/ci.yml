@@ -36,7 +36,7 @@ jobs:
         run: make check
 
       - name: portable-сборка (bundled SQLite — как в релизах)
-        run: make build GOFLAGS='-gcflags=all=-B -ldflags "-s -w"'
+        run: make build BUILDFLAGS='-gcflags=all=-B -ldflags "-s -w"'
 
       - name: smoke + security на portable-сборке
         run: |

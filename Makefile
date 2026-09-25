@@ -17,7 +17,10 @@ DATA    ?= ./data
 # -tags libsqlite3: динамическая линковка с системным SQLite (RAM/размер).
 # -gcflags=all=-B: без проверок границ в пакетах (~77KiB text).
 # -ldflags "-s -w": стрип symtab/debug.
-GOFLAGS := -tags libsqlite3 -gcflags=all=-B -ldflags "-s -w"
+# Имя BUILDFLAGS, а не GOFLAGS: make экспортирует command-line-переменные
+# в окружение recipe, а Go читает свой $GOFLAGS оттуда же (и без кавычек) —
+# получалось «unknown flag -s -w». Portable-сборка в CI: make build BUILDFLAGS='...'
+BUILDFLAGS ?= -tags libsqlite3 -gcflags=all=-B -ldflags "-s -w"
 # Лимит бинаря (байт) — лимит из README «Лимиты».
 BIN_MAX := 10485760
 
@@ -27,7 +30,7 @@ BIN_MAX := 10485760
 all: build
 
 build:
-	$(GO) build $(GOFLAGS) -o $(BIN).tmp ./cmd/webdb
+	$(GO) build $(BUILDFLAGS) -o $(BIN).tmp ./cmd/webdb
 	mv $(BIN).tmp $(BIN)
 	@sz=$$(wc -c < $(BIN)); \
 	if [ "$$sz" -gt $(BIN_MAX) ]; then \
