@@ -130,14 +130,26 @@
 - [x] CI `.github/workflows/ci.yml`:
   - `test` (ubuntu): `make check` на dev-пути (libsqlite3) + portable-сборка
     (bundled SQLite) + smoke/security; RSS_MAX_KB=14336 для x86-64;
-  - `build`: 13 linux-архитектур кросс-gcc (amd64, 386, arm64, armv7,
-    riscv64, ppc64le, ppc64, s390x, loong64*, mips64le, mips64, mipsle, mips);
+  - `build`: 13 linux-архитектур кросс-сборкой (amd64, 386, arm64, armv7,
+    riscv64, ppc64le, ppc64, s390x, loong64, mips64le, mips64, mipsle, mips);
   - `android`: arm64 + armv7 через NDK clang (то, что нужно Termux);
   - `macos`: darwin/arm64 + darwin/amd64, запуск бинарника (health/stats/
     шифрование на выходе);
   - `release` по тегу `v*`: тарболы всех сборок + SHA256SUMS.
+- [x] **CI зелёный**: ран `36100863605`… финальный `36100863635` — success,
+      16 артефактов (13 linux + 2 android + darwin), все ≤ 10 МБ
+      (макс 4.6 МБ).
 - [x] Портируемость, найденная CI/кросс-проверкой и исправленная:
-  `C.M_PURGE_ALL` (константа bionic — на glibc/macOS сборка падала;
-  теперь no-op/фолбэк), `syscall.SOCK_NONBLOCK` (linux-only → SetNonblock).
+  - `C.M_PURGE_ALL` (константа bionic — на glibc/macOS сборка падала);
+  - `syscall.SOCK_NONBLOCK` (linux-only → портативный `SetNonblock`);
+  - `mallopt` на Android — **weak-ссылка + проверка NULL** (символ есть
+    только с API 26, NDK для API21 давал «undefined symbol: mallopt»);
+  - `mips`/`mipsle` — hard-float ABI (soft-float искал `stubs-o32_soft.h`);
+  - `ppc64` (BE) и `loong64` — сборка через `zig cc` 0.16.0 (версия и
+    SHA-256 зафиксированы): дистрибутивный ppc64-тулчейн только ELFv1,
+    а линкер Go требует ELFv2; для loong64 пакета в Ubuntu нет вовсе.
+- [x] Makefile: переменная сборки переименована в `BUILDFLAGS` (make
+      экспортирует command-line-переменные в окружение, а Go читает свой
+      `$GOFLAGS` оттуда без кавычек → CI падал).
 - [x] README переоформлен: бейджи (CI/pkg.go.dev/license), установка
       `go get`, матрица архитектур, секция «Тесты», структура с `.github`.
