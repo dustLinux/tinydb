@@ -68,7 +68,7 @@ tinydb> .stats
 It understands `.help`, `.tables`, `.schema`, `.ls`, `.get`, `.put`, `.rm`,
 `.index`, `.headers on|off`, `.mode column|list|json`, `.stats`, `.flush`,
 `.export`, and read-only SQL. One-shot instead of a session:
-`webdb-shell -cmd ".tables"`.
+`webdb-shell -cmd ".tables"`. Details: [docs/SHELL.md](docs/SHELL.md).
 
 ## Clients
 

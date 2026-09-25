@@ -66,6 +66,7 @@ tinydb> .stats
 Понимает `.help`, `.tables`, `.schema`, `.ls`, `.get`, `.put`, `.rm`, `.index`,
 `.headers on|off`, `.mode column|list|json`, `.stats`, `.flush`, `.export` и
 read-only SQL. Одна команда вместо сессии: `webdb-shell -cmd ".tables"`.
+Подробности — [docs/SHELL.md](docs/SHELL.md).
 
 ## Клиенты
 

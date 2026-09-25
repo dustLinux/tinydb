@@ -1,26 +1,41 @@
 # DESIGN.md — архитектура tinydb
 
+Документ объясняет, как устроен сервер и **почему именно так**: где пришлось
+пожертвовать удобством ради памяти, что даёт write-back и как шифротекст
+переживает перезапуск. Если нужны только эндпоинты — это
+[API.md](API.md); про ключи и угрозы — [SECURITY.md](SECURITY.md).
+
 ## Обзор
 
 ```
-клиент (Go lib / C lib / curl)
-        │  HTTP/1.1 (Bearer)
+клиент (Go lib / JS lib / C lib / webdb-shell / curl)
+        │  HTTP/1.1 (Bearer или JWT)
         ▼
 internal/httpx        ← свой минималистичный HTTP: raw-сокеты (syscall),
         │               парсер запросов/ответов, chunked, deadline'ы
+        │               (+ минимальный HTTP-клиент для webdb-shell)
         ▼
-internal/server       ← REST v1: маршрутизация, auth, JSON, stats
+internal/server       ← REST v1: маршрутизация, auth (токен/JWT), JSON, stats
         │
         ▼
 internal/store        ← движок: write-back overlay ──▶ SQLite (system lib)
         │                     │                        через cgo
-        │                     └─ overlay (FIFO буфер)      
+        │                     └─ overlay (FIFO буфер)
         ▼
 internal/cryptobox    ← потоковое AES-256-GCM, контейнер WEBDBENC
 ```
 
 Рантайм: Go 1.27, `GOOS=android` (Termux), динамическая линковка с
 системным SQLite (`-tags libsqlite3`, `github.com/mattn/go-sqlite3`).
+
+Два правила, которым подчинены остальные решения:
+
+1. **RAM важнее размера бинаря.** Всё, что добавляет мегабайты в файл, но не
+   съедает память при работе, — допустимо. Всё, что держит страницы в RAM, —
+   нет.
+2. **Клиент должен быть маленьким.** Консоль и библиотеки — то, что тащат на
+   чужое устройство: там каждый мегабайт считается (собственный минимальный
+   HTTP-клиент вместо `net/http` — как раз про это).
 
 ## Почему свой HTTP, а не net/http
 
