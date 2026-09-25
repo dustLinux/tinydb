@@ -20,9 +20,12 @@ jobs:
     name: test (ubuntu)
     runs-on: ubuntu-latest
     env:
-      # Порог RSS выше термуксовых 10240: bundled SQLite и x86-64 дают иной
-      # базовый RSS. Строгий бюджет 10240 крутится на устройстве (Termux).
-      RSS_MAX_KB: '14336'
+      # Порог RSS для smoke на CI runner'е (x86-64, glibc). Бюджет спецификации
+      # — 10240 КиБ — проверяется на целевом устройстве (Termux/arm64, локальный
+      # `make check`); здесь это sanity-check с запасом: базовый RSS x86-64
+      # ~14 МиБ и колеблется на ±0.5 МиБ (страничный кэш, планировщик), из-за
+      # чего жёсткий порог 14336 иногда промахивался на 4 КиБ.
+      RSS_MAX_KB: '15360'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
