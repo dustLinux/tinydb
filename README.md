@@ -88,10 +88,12 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 | `darwin` | `arm64`, `amd64` (macOS) |
 | `android` | `arm64`, `armv7` — то, что нужно Termux (aarch64 / armv7) |
 
-Сборки cgo: Linux — кросс-gcc из apt, macOS — родной `clang` (плюс `-arch
-x86_64`), Android — NDK clang. `loong64` помечен как экспериментальный
-( зависит от наличия кросс-тулчейна в runner'е). Windows намеренно не
-поддерживается.
+Сборки cgo: Linux — кросс-gcc из apt (`mips`/`mipsle` собираются под
+hard-float ABI, как в дистрибутивах; `ppc64` требует `-mabi=elfv2`,
+как и требует линкер Go), macOS — родной `clang` (плюс `-arch
+x86_64`), Android — NDK clang. Для `loong64` (нет пакета в репозиториях
+Ubuntu) используется `zig cc`; джоб помечен экспериментальным и не роняет
+CI, если сборка не удастся. Windows намеренно не поддерживается.
 
 ## Как это работает
 
