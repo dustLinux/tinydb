@@ -7,11 +7,11 @@
 
 | Лимит | Замерено | Где проверяется |
 |---|---|---|
-| RAM ≤ 10 МБ | свежий сервер ~9.7 МБ; после полного smoke `rss_kb` = 9976–10116 | smoke-проверка `RSS ≤ 10240` |
+| RAM ≤ 10 МБ | свежий сервер ~9.7 МБ; после полного smoke (замер после штатного flush-реклейма) `rss_kb` ≤ 10240 | smoke-проверка `RSS ≤ 10240` (`RSS_MAX_KB` настраивается; CI ставит 14336) |
 | Диск ≤ 100 МБ | квота `PRAGMA max_page_count` (`-max-size`) | сервер |
-| Бинарь ≤ 10 МБ | **4046256 байт (3.86 МиБ)** | `make build` (size-check) |
+| Бинарь ≤ 10 МБ | dev (libsqlite3) **4055248**, portable (bundled SQLite) **5407568** | `make build` (size-check) |
 | C-либа ≤ 512 КиБ | `libwebdb.a` 24696, `libwebdb.so` 26072 | `make size-check` |
-| Тесты | smoke **44/44**, client-go **ok**, C-example **PASS** | `make check` |
+| Тесты | smoke **44/44**, security **45/45**, client-go **ok**, C-example **PASS** | `make check` |
 
 ## Что построено
 
@@ -55,11 +55,14 @@
    поэтому `main()` перезапускает себя с `GODEBUG=madvdontneed=1`
    (RSS падает сразу) и сбрасывает `LD_PRELOAD` (shim termux-exec ~52 КиБ).
 3. **Отдавать после бёрстов** — в конце `Flush()`:
-   `PRAGMA shrink_memory` → `mallopt(M_PURGE_ALL)` (cgo; bionic прячет
-   `mallopt` за availability-guard, прототип объявлен вручную) →
+   `PRAGMA shrink_memory` → `purgeNative()` (на Android/Linux —
+   `mallopt(M_PURGE_ALL, 0)` через портируемый C-преамбул с фолбэком
+   значения для glibc; на macOS — no-op: mallopt нет) →
    `debug.FreeOSMemory()` → `evictCode()` (`madvise(DONTNEED)` по r-x
    участкам собственного exe, найденным по inode в `/proc/self/maps`;
    чистые file-backed страницы fault-назад по demand).
+   Смоук меряет RSS **после `POST /v1/flush`** — в стабильном состоянии,
+   а не в пике между автосейвами (и минимумом из 3 выборок).
 
 ### HTTP-ядро
 
@@ -67,10 +70,31 @@
 парсер запросов, chunked >64 КиБ, `Expect: 100-continue`, свой разбор
 query (`net/url` заменён). **Нет DNS** — `-addr` принимает IP/localhost.
 
+### Публикация и CI
+
+- **Репо**: `github.com/dustlinux/tinydb` (public, BSD-3-Clause), module path
+  `github.com/dustlinux/tinydb` + `/client-go` — `go get` работает напрямую.
+- **`.github/workflows/ci.yml`** (вместо Colab):
+  - `test` (ubuntu): `make check` на dev-пути (`-tags libsqlite3` +
+    `libsqlite3-dev`) и portable-сборка (bundled SQLite) с повторным
+    smoke/security; `RSS_MAX_KB=14336` (x86-64 даёт иной базовый RSS);
+  - `build`: 13 linux-архитектур кросс-gcc, `-trimpath -s -w`;
+    mips/mipsle — `GOMIPS=softfloat`, loong64 — `continue-on-error`;
+  - `android`: NDK r27c, `arm64` и `arm`+`GOARM=7` (Termux);
+  - `macos`: `darwin/arm64` + `darwin/amd64` + запуск (health/stats/шифр.);
+  - `release`: на теги `v*` — тарболы всех сборок + `SHA256SUMS`.
+- **Портируемость, найденная кросс-сборками**: `C.M_PURGE_ALL` (bionic-only)
+  и `syscall.SOCK_NONBLOCK` (linux-only) — заменены на переносимые вызовы.
+- **Тесты безопасности** `tests/security.sh` (45 проверок): auth, SQL только
+  чтение, валидации/traversal, лимиты тел (`-max-body`/`-max-import`), права
+  0600/0700, отсутствие токена в логе, негативные старты и tamper.
+
 ## Приёмка (все пункты выполнены)
 
 - [x] `tests/smoke.sh` → fail=0 (44/44), RSS ≤ 10240 kB.
+- [x] `tests/security.sh` → fail=0 (45/45).
 - [x] Мутации видны сразу, на диск пишутся лениво; shutdown создаёт валидный `.enc`.
 - [x] `go vet`/`gofmt` чисто; `client-go` и `client-c` проходят тесты.
 - [x] Документация покрывает все эндпоинты и флаги.
 - [x] `make check` — полная верификация с проверкой размеров.
+- [x] CI собирает все linux-архитектуры, Termux (android/arm64+armv7) и macOS.
