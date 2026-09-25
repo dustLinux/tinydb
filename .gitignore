@@ -1,3 +1,16 @@
+# сборки
+/bin/
+*.o
+*.a
+*.so
+client-c/example
+
+# данные сервера и тестов (включая ключи и токены!)
+/data/
+/data-sec/
+/data-sec-pass/
+*.log
+
 # временные файлы тестов
 *.tmp
 /tmp-*.json
