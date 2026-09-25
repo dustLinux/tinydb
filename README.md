@@ -1,212 +1,199 @@
 # tinydb
 
+Маленькая база данных, которая живёт рядом с программой: SQLite внутри, наружу —
+REST API. Данные на диске зашифрованы, процесс ест меньше 10 МБ RAM, а бинарь
+собирается под все Linux-архитектуры, Termux и macOS.
+
+Придумана не «на замену Postgres», а для конкретной задачи: поднять базу на
+телефоне или в контейнере, где нет ни памяти, ни желания ставить Postgres.
+
+```sh
+./webdb -data ./data          # токен сгенерируется в ./data/token
+```
+
+Нужен Go (для сборки) или готовый бинарь из
+[релизов](https://github.com/dustLinux/tinydb/releases/tag/v0.1.0).
+
 [![ci](https://github.com/dustlinux/tinydb/actions/workflows/ci.yml/badge.svg)](https://github.com/dustlinux/tinydb/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/dustlinux/tinydb/client-go.svg)](https://pkg.go.dev/github.com/dustlinux/tinydb/client-go)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
 
-Крошечная встраиваемая база данных с REST API (ранее — `web-db`): SQLite на
-бэкенде, шифрование at-rest по умолчанию, сервер на Go (без `net/http` и
-`net`), клиентские библиотеки для Go и C.
+---
 
-Ориентировочный бюджет (Termux/Android arm64, замерено):
+## За минуту
 
-| Метрика | Значение |
-|---|---|
-| RSS сервера под нагрузкой | ≤ 10 МБ (`rss_kb` ≤ 10240, smoke-проверка) |
-| Бинарь `webdb` | ~4.0 МБ (`-ldflags "-s -w"`, `-gcflags=all=-B`) |
-| Диск (квота) | 100 МБ (`-max-size`) |
-| C-клиент: `libwebdb.a` / `libwebdb.so` | 24696 / 26072 байт (лимит 512 КиБ) |
-
-## Установка
-
-### Go-клиент
+Подняли сервер, создали коллекцию, положили документ, прочитали обратно:
 
 ```sh
-go get github.com/dustlinux/tinydb/client-go
-```
+make run                          # или ./bin/webdb -addr 127.0.0.1:8099 -data ./data
+TOKEN=$(cat data/token)           # токен автогенерируется при первом старте
 
-```go
-package main
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"items"}' \
+     http://127.0.0.1:8099/v1/collections
 
-import (
-	"fmt"
-
-	webdb "github.com/dustlinux/tinydb/client-go"
-)
-
-func main() {
-	c := webdb.New("http://127.0.0.1:8080", "токен-из-data/token")
-	h, err := c.Health()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(h.Status)
-}
-```
-
-Клиенты — все без зависимостей:
-
-- **Go** — только stdlib (`net/http`, `encoding/json`):
-  `go get github.com/dustlinux/tinydb/client-go`, подробнее
-  [docs/CLIENT-GO.md](docs/CLIENT-GO.md);
-- **JS/TS** — ноль зависимостей, Node.js ≥18 / браузер / Deno / Bun, типы
-  из коробки: `npm install tinydb-client`, подробнее
-  [client-js/README.md](client-js/README.md);
-- **C** — своя реализация HTTP/1.1, `.a`/`.so` ≤512 КиБ:
-  [docs/CLIENT-C.md](docs/CLIENT-C.md).
-
-### Сервер
-
-- **Бинарники под все архитектуры** собирает CI и публикует в
-  [Releases](https://github.com/dustlinux/tinydb/releases) (см. таблицу ниже).
-- **Из исходников**: `make build` (Termux: `pkg install clang go`, системный
-  SQLite) или `go build -o webdb ./cmd/webdb` (bundled SQLite, без cgo-зависимостей
-  от системы — так собирает CI).
-
-## Quickstart
-
-```sh
-# запуск (токен автогенерируется в data/token)
-make run
-# эквивалент:
-./bin/webdb -addr 127.0.0.1:8099 -data ./data -writeback 1s
-
-TOKEN=$(cat data/token)
-
-curl -s -H "Authorization: Bearer $TOKEN" -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"items"}' http://127.0.0.1:8099/v1/collections
-
-curl -s -H "Authorization: Bearer $TOKEN" -X PUT \
-  -d '{"title":"widget","price":10}' \
-  'http://127.0.0.1:8099/v1/collections/items/docs/it1?upsert=true'
+curl -s -X PUT -H "Authorization: Bearer $TOKEN" \
+     -d '{"title":"гайка","price":10}' \
+     'http://127.0.0.1:8099/v1/collections/items/docs/1?upsert=true'
 
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://127.0.0.1:8099/v1/collections/items/docs?order=price:desc&limit=10'
+     'http://127.0.0.1:8099/v1/collections/items/docs?order=price:desc&limit=10'
 ```
 
-Полный список эндпоинтов — [docs/API.md](docs/API.md).
+Всё, что умеет сервер, — в [docs/API.md](docs/API.md): коллекции, документы,
+bulk-загрузки, индексы, фильтры, read-only SQL, экспорт/импорт, бэкап.
 
-## Архитектуры (собирает CI)
+## Клиенты
 
-| GOOS | GOARCH |
+Три языка, ни одного лишнего байта зависимостей.
+
+```go
+// Go — только стандартная библиотека
+c := webdb.New("http://127.0.0.1:8080", token)
+doc, _ := c.Insert("users", map[string]any{"name": "alice"})
+```
+
+```js
+// JS/TS — Node.js ≥18, браузер, Deno, Bun. Без сборки, типы из коробки
+import { Client } from 'tinydb-client';
+const c = new Client('http://127.0.0.1:8080', token);
+const doc = await c.insert('users', { name: 'alice' });
+```
+
+```c
+/* C — своя реализация HTTP/1.1, .a/.so весят меньше 30 КиБ */
+webdb_client c;
+webdb_client_init(&c, "http://127.0.0.1:8080", token);
+```
+
+| | установка | подробности |
+|---|---|---|
+| Go | `go get github.com/dustlinux/tinydb/client-go` | [docs/CLIENT-GO.md](docs/CLIENT-GO.md) |
+| JS/TS | `npm install tinydb-client` | [client-js/README.md](client-js/README.md) |
+| C | собирается из `client-c/` | [docs/CLIENT-C.md](docs/CLIENT-C.md) |
+
+## Что внутри и почему
+
+**SQLite, но свой HTTP-слой.** Сервер не берёт `net/http` — он разговаривает с
+сокетом сам (`internal/httpx`). Звучит странно, но `net/http` с его пулами,
+keep-alive и контекстами стоит заметно больше, чем весь остальной проект
+вместе: без него бинарь меньше, а RSS помещается в 10 МБ. Это осознанный размен,
+а не спор о вкусе.
+
+**Записи сначала в память.** Мутация возвращает ответ сразу, а в SQLite
+попадает пачками — по таймеру, при чтении, при переполнении буфера или при
+`POST /v1/flush`. На чтениях «свои» записи всегда видны, так что приложение не
+замечает буферизации. Цена — `SIGKILL` может съесть последние записи (не больше,
+чем за интервал `-writeback`); `Ctrl-C` и `SIGTERM` буфер дренируют всегда.
+
+**На диске лежит только шифротекст.** При работе база расшифрована в
+`data/db.sqlite` (права `0600`), но при каждом flush/autosave сервер пишет
+`data/db.sqlite.enc` — потоковый AES-256-GCM с уникальным nonce на каждый
+чанк — и удаляет plaintext. Ключ либо лежит рядом (`db.key`), либо его заменяет
+пароль (`-passphrase`, KDF со 100k итерациями). Оговорка честная: если ключ лежит
+рядом с базой, копия каталога = база; для настоящего разделения нужен
+passphrase или внешний KMS.
+
+**Память экономят на каждом шаге.** Кэш SQLite ограничен, Go-куча живёт под
+`GOMEMLIMIT=2MiB`, а после каждого бёрста сервер отдаёт память операционной
+системе: `shrink_memory`, `mallopt(M_PURGE_ALL)`, `FreeOSMemory` и `madvise`
+по собственному коду бинаря. На Termux/arm64 сервер под нагрузкой — около
+9–10 МБ RSS, и это проверяется автоматически (`GET /v1/stats → rss_kb`).
+
+Подробности, включая формат контейнера и модель угроз: [docs/DESIGN.md](docs/DESIGN.md),
+[docs/SECURITY.md](docs/SECURITY.md).
+
+## Скачать
+
+Готовые бинари — в [Releases](https://github.com/dustlinux/tinydb/releases),
+вместе с `SHA256SUMS`. Собрано в каждом пуше, поэтому актуальная версия всегда
+в [Actions](https://github.com/dustLinux/tinydb/actions).
+
+| Платформа | Архитектуры |
 |---|---|
-| `linux` | `amd64`, `386`, `arm64`, `armv7`, `riscv64`, `ppc64le`, `ppc64`, `s390x`, `mips64le`, `mips64`, `mipsle`, `mips`, `loong64`* |
-| `darwin` | `arm64`, `amd64` (macOS) |
-| `android` | `arm64`, `armv7` — то, что нужно Termux (aarch64 / armv7) |
+| Linux | `amd64`, `386`, `arm64`, `armv7`, `riscv64`, `ppc64le`, `ppc64`, `s390x`, `mips64`, `mips64le`, `mips`, `mipsle`, `loong64` |
+| Termux (Android) | `arm64`, `armv7` |
+| macOS | `arm64` (Apple Silicon), `amd64` (Intel) |
 
-Сборки cgo: Linux — кросс-gcc из apt; там, где дистрибутивный тулчейн не
-подходит, используется `zig cc` (проверенные версия и SHA-256):
-- `mips`/`mipsle` — hard-float ABI (дистрибутивный o32-тулчейн только
-  hard-float; soft-float требует отсутствующий `stubs-o32_soft.h`);
-- `ppc64` — big-endian, нужен ELFv2: дистрибутивный `powerpc64-linux-gnu`
-  только ELFv1 (нет `stubs-64-v2.h`), а линкер Go генерирует ELFv2;
-- `loong64` — пакета кросс-gcc в репозиториях Ubuntu нет вовсе.
+Windows не поддерживается и не планируется. Там, где в дистрибутивах нет
+подходящего кросс-компилятора (`ppc64` с его ELFv2, `loong64`, mips с
+hard-float ABI), сборка идёт через `zig cc` — версия и SHA-256 зафиксированы в
+[ci.yml](.github/workflows/ci.yml).
 
-macOS — родной `clang` (плюс `-arch x86_64`), Android — NDK clang. Джобы
-`ppc64`/`loong64` помечены experimental: не роняют CI, если тулчейн
-недоступен. Windows намеренно не поддерживается.
+Собрать самому:
 
-## Как это работает
-
-- **Хранение** — один SQLite-файл `data/db.sqlite` (plaintext, 0600) во время
-  работы. На старте сервер расшифровывает рядом лежащий `data/db.sqlite.enc`;
-  при flush/autosave/shutdown записывает новый зашифрованный снапшот и
-  (по умолчанию) удаляет plaintext. Формат контейнера — `WEBDBENC`
-  (AES-256-GCM, потоковое шифрование по 64 КиБ-чанкам), см.
-  [docs/SECURITY.md](docs/SECURITY.md).
-- **Write-back (lazy)** — мутации сначала попадают в RAM-буфер и применяются
-  в SQLite пачками: фоновым тикером (`-writeback`), при чтениях (read
-  barrier), при переполнении буфера, по `POST /v1/flush` и при штатном
-  завершении. Чтения видят свои записи всегда: `Get()` смотрит в overlay
-  первым. **SIGKILL может потерять буфер** (до интервала тикера) —
-  SIGINT/SIGTERM дренируют его обязательно. Подробнее —
-  [docs/DESIGN.md](docs/DESIGN.md).
-- **Транспорт** — собственный минимальный HTTP/1.1 на raw-сокетах
-  (`internal/httpx`): без `net/http`, `net`, `net/url`, `regexp`, `log/slog`.
-  Это осознанный выбор ради RAM/размера бинаря, а не амбиция —
-  см. [docs/DESIGN.md](docs/DESIGN.md).
+```sh
+make build      # Termux: pkg install clang go
+go build -o webdb ./cmd/webdb   # SQLite вшит в бинарь, без зависимостей cgo
+```
 
 ## Флаги
 
-| Флаг | По умолчанию | Назначение |
+По умолчанию всё безопасное: сервер слушает только `127.0.0.1`, токен
+генерируется сам, auth включён.
+
+| Флаг | По умолчанию | Зачем |
 |---|---|---|
-| `-addr` | `127.0.0.1:8080` | адрес listen (хост — только IP-литерал или `localhost`, DNS нет). По умолчанию только loopback: публичный bind требует явного `-addr :8080` |
-| `-data` | `./data` | каталог данных (`db.sqlite`, `db.sqlite.enc`, `db.key`, `token`) |
-| `-max-size` | `100` | квота на диске, МиБ |
-| `-cache-kb` | `64` | кэш страниц SQLite в КиБ **на соединение** (RAM-бюджет) |
-| `-go-memlimit` | `2` | лимит Go-кучи, МиБ (`GOMEMLIMIT`), 0 = выкл. |
-| `-autosave` | `60s` | писать шифрованный снапшот каждые N (`0` = только flush/shutdown) |
-| `-writeback` | `1s` | применять RAM-буфер в SQLite каждые N (`0` = только барьеры/лимиты/flush/shutdown) |
-| `-buffer-bytes` | `1048576` | лимит буфера write-back, байт |
-| `-buffer-items` | `10000` | лимит буфера write-back, число мутаций |
-| `-keep-plain` | `false` | оставить `db.sqlite` после завершения |
-| `-max-body` | `4` | максимум тела запроса, МиБ |
-| `-max-import` | `64` | максимум `/v1/import`, МиБ (стримится, не буферизуется в RAM) |
-| `-cors` | `false` | permissive CORS (для отладки) |
-| `-token` / `-token-file` | — | API-токен; по умолчанию генерируется в `<data>/token`; также env `WEBDB_TOKEN` |
-| `-no-auth` | `false` | отключить auth (только локальная разработка!) |
-| `-key-file` | `<data>/db.key` | 32-байтовый ключ шифрования |
-| `-passphrase` / `-passphrase-file` | — | шифровать паролем вместо keyfile (лучше env `WEBDB_PASSPHRASE`) |
+| `-addr` | `127.0.0.1:8080` | адрес; публичный доступ — только явно: `-addr :8080` |
+| `-data` | `./data` | каталог данных (`db.sqlite`, `.enc`, `db.key`, `token`) |
+| `-max-size` | `100` | квота на диск, МБ |
+| `-autosave` | `60s` | как часто писать зашифрованный снапшот; `0` — только flush и завершение |
+| `-writeback` | `1s` | как часто сливать RAM-буфер в SQLite; `0` — только по требованию |
+| `-cache-kb` | `64` | кэш страниц SQLite на соединение, КиБ |
+| `-go-memlimit` | `2` | лимит Go-кучи, МБ (`GOMEMLIMIT`) |
+| `-max-body` | `4` | максимум тела запроса, МБ |
+| `-max-import` | `64` | максимум для `/v1/import`, МБ (стримится, не буферизуется) |
+| `-buffer-bytes` / `-buffer-items` | `1 MiB` / `10000` | пределы RAM-буфера |
+| `-key-file` | `<data>/db.key` | ключ шифрования (32 байта) |
+| `-passphrase` | — | шифровать паролем вместо файла ключа; лучше `WEBDB_PASSPHRASE` |
+| `-token` / `-token-file` | авто | свой API-токен вместо сгенерированного; также `WEBDB_TOKEN` |
+| `-no-auth` | выкл. | выключить авторизацию. Только для локальной отладки |
+| `-keep-plain` | выкл. | не удалять `db.sqlite` после завершения |
+| `-cors` | выкл. | разрешить CORS (для отладки из браузера) |
 
-## Лимиты и гарантии
+## Про безопасность
 
-- **RAM ≤ 10 МБ** — RSS держится в этом коридоре: кэш SQLite 64 КиБ×2
-  соединения, `GOGC=30` + `GOMEMLIMIT=2MiB`, после каждой фазы бёрста
-  `Flush()` возвращает память ОС (`shrink_memory`, `mallopt(M_PURGE_ALL)`,
-  `FreeOSMemory`, `madvise(DONTNEED)` по r-x бинаря). Метрика —
-  `GET /v1/stats → rss_kb`.
-- **Диск ≤ 100 МБ** — `PRAGMA max_page_count` под квоту.
-- **Долговечность** — штатное завершение (SIGINT/SIGTERM) гарантирует
-  драйн write-back буфера + шифрованный снапшот. SIGKILL = потеря
-  неприменённых мутаций (до интервала `-writeback`).
+Авторизация обязательна: `Authorization: Bearer <token>` или `X-API-Key`, всё
+кроме `/health` закрыто. Токен генерируется криптослучайно, лежит в `0600` и
+никогда не пишется в логи.
 
-## Тесты
+SQL в `/v1/query` действительно read-only, а не «словами»: запрос исполняется с
+`PRAGMA query_only=1` и SQLite-authorizer'ом, который запрещает всё, кроме
+чтения. Поэтому `WITH x AS (SELECT 1) DELETE FROM docs` получает `400` и
+ничего не удаляет (такой баг был — поймали активным тестированием, теперь
+закрыт тестом).
+
+Проверено атаками на живом сервере, а не только чтением кода: обход авторизации
+15 способами, path traversal, request smuggling, DoS, подделка `.enc`, права
+файлов, попытки писать через SQL. Из этого выросли 69 проверок в
+`tests/security.sh`.
+
+Чего нет: TLS (ставится за nginx/Caddy), rate limit, защита от локального
+root — кто читает файл ключа, тот читает базу. Модель угроз целиком:
+[docs/SECURITY.md](docs/SECURITY.md).
+
+## Разработка
 
 ```sh
-make test    # gofmt + vet + smoke (44) + security (45) + клиенты Go/C/JS
-make check   # то же + контроль размеров (бинарь ≤10 МиБ, C-клиент ≤512 КиБ)
+make check   # gofmt, vet, e2e (44), безопасность (69), клиенты Go/JS/C, размеры
 ```
 
-- `tests/smoke.sh` — e2e по API, включая write-back, экспорт/импорт, RSS.
-- `tests/security.sh` — **тесты безопасности**: auth (401/`X-API-Key`),
-  SQL-инъекции (SELECT-only, без стека, параметризация), валидации имён и
-  path traversal, лимиты тел (`413`), права файлов (`0700`/`0600`), отсутствие
-  токена в логах, CORS выключен, негативные старты (битый/чужой ключ,
-  подделанный `db.sqlite.enc`, неверный passphrase) и режим passphrase.
-- `tests/c-example.sh` — C-клиент против живого сервера.
+- `tests/smoke.sh` — сквозной тест API, write-back, экспорт/импорт, RSS.
+- `tests/security.sh` — 69 проверок безопасности.
+- `client-go`, `client-js`, `client-c` — у каждого свои тесты против живого сервера.
 
-CI (GitHub Actions) гоняет `make check`-набор на Ubuntu, дополнительно
-проверяет запуск бинарника на macOS и собирает все архитектуры из таблицы
-выше (артефакты — в Actions, релизные тарболы — под тегом `v*`).
+CI гоняет всё это на Ubuntu, поднимает бинарь на macOS и собирает все
+архитектуры из таблицы выше; по тегу `v*` собирает релиз с тарболами и
+`SHA256SUMS`.
 
-## Структура
+## Ещё почитать
 
-```
-├── cmd/webdb/           точка входа: флаги, re-exec (GODEBUG), сигналы
-├── internal/
-│   ├── httpx/           минимальный HTTP/1.1: сокеты, парсер, чанки, query
-│   ├── logx/            ключ=значение логгер (замена log/slog)
-│   ├── cryptobox/       потоковое AES-256-GCM, контейнер WEBDBENC, KDF
-│   ├── store/           движок: SQLite + write-back overlay + flush/evict
-│   └── server/          REST-хендлеры v1, auth, stats
-├── client-go/           Go-клиент (github.com/dustlinux/tinydb/client-go)
-├── client-js/           JS/TS-клиент (tinydb-client, CJS+ESM+типы, без сборки)
-├── client-c/            C-клиент (libwebdb.a/.so) + example
-├── tests/               smoke.sh, security.sh, c-example.sh, lib.sh
-├── .github/workflows/   CI: тесты + сборки всех архитектур + releases
-├── docs/                API, DESIGN, SECURITY, CLIENT-GO, CLIENT-C
-├── PLAN.md, TASK.md     архитектура и чек-лист
-└── Makefile             build / test / run / clients / check / clean
-```
-
-## Документация
-
-- [docs/API.md](docs/API.md) — все эндпоинты, параметры, коды ошибок, curl.
-- [docs/DESIGN.md](docs/DESIGN.md) — архитектура, write-back, RAM-бюджет.
-- [docs/SECURITY.md](docs/SECURITY.md) — шифрование, ключи, threat model.
-- [docs/CLIENT-GO.md](docs/CLIENT-GO.md), [docs/CLIENT-C.md](docs/CLIENT-C.md) — клиенты.
+- [docs/API.md](docs/API.md) — все эндпоинты с примерами.
+- [docs/DESIGN.md](docs/DESIGN.md) — как устроены write-back, шифротекст и RAM-бюджет.
+- [docs/SECURITY.md](docs/SECURITY.md) — ключи, контейнер `WEBDBENC`, модель угроз.
+- [PLAN.md](PLAN.md) — архитектура и решения с обоснованием.
 
 ## Лицензия
 
-BSD 3-Clause — см. [LICENSE](LICENSE).
+BSD 3-Clause, см. [LICENSE](LICENSE).
