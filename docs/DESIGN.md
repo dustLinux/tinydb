@@ -8,12 +8,12 @@
 ## Обзор
 
 ```
-клиент (Go lib / JS lib / C lib / webdb-shell / curl)
+клиент (Go lib / JS lib / C lib / webdb shell / curl)
         │  HTTP/1.1 (Bearer или JWT)
         ▼
 internal/httpx        ← свой минималистичный HTTP: raw-сокеты (syscall),
         │               парсер запросов/ответов, chunked, deadline'ы
-        │               (+ минимальный HTTP-клиент для webdb-shell)
+        │               (+ минимальный HTTP-клиент для webdb shell)
         ▼
 internal/server       ← REST v1: маршрутизация, auth (токен/JWT), JSON, stats
         │

@@ -162,7 +162,7 @@
       и подмена RS/HS отвергаются. Сервер принимает статический токен ИЛИ JWT.
 - [x] Утилита выпуска: `webdb token -sub -ttl -iss -aud -scp -nbf`
       (секрет из `WEBDB_JWT_SECRET`, чтобы не светился в истории команд).
-- [x] **Консоль `webdb-shell`** (в духе sqlite3): `.tables .schema .ls .get
+- [x] **Консоль `webdb shell` (подкоманда, не отдельный бинарь)** (в духе sqlite3): `.tables .schema .ls .get
       .put .rm .index .headers .mode .stats .flush .export .token` + read-only
       SQL, многострочный ввод, режимы column/list/json, bin-пайплайн.
 - [x] **Минимальный HTTP-клиент** `internal/httpx/client.go` — консоль 3.5 МБ

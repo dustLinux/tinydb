@@ -49,12 +49,11 @@ documents, bulk writes, indexes, filters, read-only SQL, export/import, backup.
 
 ## The shell
 
-If you would rather not write curl, there is `webdb-shell` — a console in the
-spirit of sqlite3:
+If you would rather not write curl, there is `webdb shell` — a console in the
+spirit of sqlite3 that lives inside the very same binary:
 
 ```sh
-make shell
-./bin/webdb-shell -addr 127.0.0.1:8099 -data ./data
+./bin/webdb shell -addr 127.0.0.1:8099 -data ./data
 ```
 
 ```
@@ -68,7 +67,7 @@ tinydb> .stats
 It understands `.help`, `.tables`, `.schema`, `.ls`, `.get`, `.put`, `.rm`,
 `.index`, `.headers on|off`, `.mode column|list|json`, `.stats`, `.flush`,
 `.export`, and read-only SQL. One-shot instead of a session:
-`webdb-shell -cmd ".tables"`. Details: [docs/SHELL.md](docs/SHELL.md).
+`webdb shell -cmd ".tables"`. Details: [docs/SHELL.md](docs/SHELL.md).
 
 ## Clients
 
@@ -161,8 +160,8 @@ always in [Actions](https://github.com/dustLinux/tinydb/actions).
 | Termux (Android) | `arm64`, `armv7` |
 | macOS | `arm64` (Apple Silicon), `amd64` (Intel) |
 
-The `webdb-shell` console is built separately for linux/amd64, linux/arm64 and
-both macOS targets. Releases also ship an **AI agent skill** as
+The console is part of the same binary, so it is available everywhere the
+server is. Releases also ship an **AI agent skill** as
 `tinydb-agent-skill.tar.gz` ([source](skills/tinydb/SKILL.md), written in
 Russian) — a short briefing on starting the server, using the console and API.
 

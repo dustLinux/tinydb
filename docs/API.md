@@ -3,7 +3,7 @@
 Документ описывает все эндпоинты: что принимают, что возвращают и какие ошибки
 возможны. Если хочется сначала «просто потрогать» — загляните в
 [README](../README.md) (пример на curl за минуту) или запустите консоль
-`webdb-shell`, где те же операции делаются руками, без написания HTTP-запросов.
+`webdb shell`, где те же операции делаются руками, без написания HTTP-запросов.
 
 Базовый URL: `http://127.0.0.1:8080` (по умолчанию только loopback).
 
@@ -121,7 +121,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -X POST \
 #### `GET /v1/collections` — список (read-barrier)
 
 ```json
-{"collections":[{"name":"items","docs":4,"created_ms":...}],"count":1}
+{"collections":[{"name":"items","created":1790322671770,"docs":4,"data_bytes":2048}],"count":1}
 ```
 
 #### `GET /v1/collections/{coll}` — метаданные (read-barrier)
@@ -139,7 +139,7 @@ curl -s -H "Authorization: Bearer $TOKEN" -X POST \
 ### Документы
 
 Документ — произвольный JSON-объект. Идентификатор `_id` задаётся в URL;
-`_created_ms`/`_updated_ms` сервер управляет сам.
+`created`/`updated` (Unix-время в миллисекундах) сервер проставляет и обновляет сам.
 
 #### `PUT /v1/collections/{coll}/docs/{id}?upsert=true` — вставить/заменить
 
@@ -238,7 +238,7 @@ data TEXT, ...)`, `_collections(name TEXT, ...)`.
 #### `GET /v1/collections/{coll}/indexes` (read-barrier)
 
 ```json
-{"indexes":["idx_price"]}
+{"indexes":["ix_items_price"]}
 ```
 
 #### `DELETE /v1/collections/{coll}/indexes/{field}`

@@ -1,10 +1,11 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Тесты консоли webdb-shell (в духе sqlite3) против живого сервера.
+# Тесты консоли `webdb shell` (в духе sqlite3) против живого сервера.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/bin/webdb"
-SHELL_BIN="$ROOT/bin/webdb-shell"
+# Консоль — подкоманда того же бинаря.
+SHELL_BIN="$ROOT/bin/webdb"
 BASE="http://127.0.0.1:8095"
 DDIR="$ROOT/data-shell"
 LOG="$ROOT/shell-server.log"
@@ -18,7 +19,7 @@ chk_not() {
   if [[ "$3" != *"$2"* ]]; then pass=$((pass+1)); echo "  ok   $1";
   else fail=$((fail+1)); echo "  FAIL $1: forbidden '$2' present: ${3:0:300}"; fi
 }
-sh_() { printf '%s\n' "$@" | "$SHELL_BIN" -addr 127.0.0.1:8095 -data "$DDIR" 2>&1; }
+sh_() { printf '%s\n' "$@" | "$SHELL_BIN" shell -addr 127.0.0.1:8095 -data "$DDIR" 2>&1; }
 
 SRVPID=""
 cleanup() {
@@ -29,7 +30,7 @@ cleanup() {
 trap cleanup EXIT
 
 [ -x "$BIN" ] || { echo "FAIL: нет $BIN — make build"; exit 1; }
-[ -x "$SHELL_BIN" ] || { echo "FAIL: нет $SHELL_BIN — make shell"; exit 1; }
+[ -x "$SHELL_BIN" ] || { echo "FAIL: нет $SHELL_BIN — make build"; exit 1; }
 if curl -s --max-time 1 "$BASE/health" >/dev/null 2>&1; then
   echo "FAIL: порт 8095 занят посторонним сервером"; exit 1
 fi
@@ -101,18 +102,18 @@ chk data-intact-after-refused "1" "$out"
 echo "== справка, версия, ошибки"
 out=$(sh_ '.help')
 chk help-nonempty "SQL" "$out"
-out=$("$SHELL_BIN" -version)
-chk version "webdb-shell" "$out"
+out=$("$SHELL_BIN" shell -version)
+chk version "webdb shell" "$out"
 out=$(sh_ 'выдумка')
 chk unknown-command "неизвестная команда" "$out"
 out=$(sh_ '.ls items 999' '.quit')
 chk quit-exits "" "$(echo "$out" | tail -1)"
 
-echo "== размер бинаря"
+echo "== размер бинаря (консоль внутри, лимит прежний)"
 sz=$(wc -c < "$SHELL_BIN")
-echo "  info webdb-shell = $sz байт"
-if [ "$sz" -le 5242880 ]; then pass=$((pass+1)); echo "  ok   shell-le5mib";
-else fail=$((fail+1)); echo "  FAIL shell-le5mib: $sz > 5MiB (клиент должен быть маленьким)"; fi
+echo "  info webdb (server+shell) = $sz байт"
+if [ "$sz" -le 10485760 ]; then pass=$((pass+1)); echo "  ok   binary-le10mib";
+else fail=$((fail+1)); echo "  FAIL binary-le10mib: $sz > 10MiB"; fi
 
 echo
 echo "RESULT: pass=$pass fail=$fail"
