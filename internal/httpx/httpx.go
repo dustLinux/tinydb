@@ -607,6 +607,12 @@ const (
 	maxLineBytes   = 8 << 10
 )
 
+// readLine читает строку, завершённую ровно CRLF.
+//
+// Строгость — часть защиты от request smuggling: bare LF и «голый» CR внутри
+// строки принимаются некоторыми прокси, и расхождение парсеров (прокси против
+// сервера) позволяет спрятать второй запрос. Такие запросы отвергаются сразу,
+// а не «дожидаются» дедлайна соединения.
 func readLine(br *bufio.Reader) (string, error) {
 	var sb strings.Builder
 	for {
@@ -625,12 +631,22 @@ func readLine(br *bufio.Reader) (string, error) {
 		}
 		return "", err
 	}
-	return strings.TrimRight(sb.String(), "\r\n"), nil
+	s := sb.String()
+	if !strings.HasSuffix(s, "\r\n") {
+		return "", errBadCRLF
+	}
+	body := s[:len(s)-2]
+	if strings.ContainsAny(body, "\r\n") {
+		// «Голый» CR-разделитель (CR-only) или лишние переводы строк внутри.
+		return "", errBadCRLF
+	}
+	return body, nil
 }
 
 var (
 	errLineTooLong = errors.New("line too long")
 	errTooManyHdrs = errors.New("too many headers")
+	errBadCRLF     = errors.New("bare LF or stray CR in request line")
 )
 
 func readRequest(br *bufio.Reader) (*Request, error) {
