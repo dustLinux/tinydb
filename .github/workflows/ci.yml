@@ -243,7 +243,8 @@ jobs:
   # --------------------------------------------------- скилл для ИИ-агентов
   agent-skill:
     name: agent skill (SKILL.md)
-    if: github.event_name != 'pull_request'
+    # Валидация скилла идёт на каждом PR (это 5 секунд), упаковка — только
+    # для релизов: на PR артефакт всё равно не попадёт в релиз.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -252,10 +253,13 @@ jobs:
           test -f skills/tinydb/SKILL.md
           head -1 skills/tinydb/SKILL.md | grep -q '^---$'   # YAML-фронтматтер
           grep -q '^name: ' skills/tinydb/SKILL.md
+          grep -q '^description: ' skills/tinydb/SKILL.md
           echo "skill ok: $(wc -l < skills/tinydb/SKILL.md) строк"
       - name: Упаковка
+        if: startsWith(github.ref, 'refs/tags/v')
         run: tar -czf tinydb-agent-skill.tar.gz -C skills tinydb
       - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
         with:
           name: tinydb-agent-skill
           path: tinydb-agent-skill.tar.gz
